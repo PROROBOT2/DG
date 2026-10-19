@@ -41,7 +41,7 @@ HOUR, DAY = 3600, 86400
 REMIND_DAYS = 2  # expiry se itne din pehle reminder
 
 # ---- /availableotts ka reply ----
-AVAILABLE_OTTS_TEXT = "📌AVAILABLE OTT's & Services
+AVAILABLE_OTTS_TEXT = """📌AVAILABLE OTT's & Services
 "Alt Balaji" 🅰️
 "Aha" 🔶
 "Arey Digital" 🎬
@@ -86,7 +86,7 @@ Example: ↓↓
 "Reality Show's"
 "Laughter Chef"
 "India's Got Talent"
-"All Other Shows""
+"All Other Shows\""""
 
 # ---- Plans (price ₹ mein) ----
 PLANS = [
@@ -338,16 +338,3 @@ async def user_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pl = get_plan(buying["plan"])
             if pl:
                 cap += f"\n{pl['label']} — ₹{pl['price']}"
-        cap += "\n\nPayment ke baad yahin screenshot (photo) bhejein."
-        await context.bot.send_photo(q.from_user.id, fid, caption=cap)
-        return
-
-    await q.answer()
-    await touch_user(q.from_user)
-
-    if data == "home":
-        context.user_data.pop("buying", None)
-        await q.edit_message_text(HOME_TEXT, reply_markup=home_markup(), parse_mode=ParseMode.HTML)
-    elif data == "my":
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="home")]])
-        await q.edit_message_text(await my_subs_text(q.from_user.id), reply_markup=kb, parse_mode=ParseMode.HTML)
