@@ -41,7 +41,7 @@ HOUR, DAY = 3600, 86400
 REMIND_DAYS = 2  # expiry se itne din pehle reminder
 
 # ---- /availableotts ka reply. Yahan badal do ----
-AVAILABLE_OTTS_TEXT = '''📌AVAILABLE OTT's & Services
+AVAILABLE_OTTS_TEXT = '''<pre>📌AVAILABLE OTT's &amp; Services</pre>
 "Alt Balaji" 🅰️
 "Aha" 🔶
 "Arey Digital" 🎬
@@ -65,7 +65,7 @@ AVAILABLE_OTTS_TEXT = '''📌AVAILABLE OTT's & Services
 
 
 
-👾ALL Daily Shows 👾
+<blockquote>👾ALL Daily Shows 👾</blockquote>
 "TV SHOWS"🌈
 "Colors"
 "Dangal-Play"
@@ -74,7 +74,7 @@ AVAILABLE_OTTS_TEXT = '''📌AVAILABLE OTT's & Services
 "Sun NXT"
 "ZEE-5"
 
-Example: ↓↓
+<blockquote><i>Example: ↓↓</i></blockquote>
 "Taarak Mehta"
 "Bigg Boss"
 "New-CiD S03"
@@ -82,7 +82,7 @@ Example: ↓↓
 "Kumkum Bhagya"
 "All Other On-going Shows"
 
-"Weekly Releases Show's ⚡️
+<blockquote>Weekly Releases Show's ⚡️</blockquote>
 "Reality Show's"
 "Laughter Chef"
 "India's Got Talent"
@@ -269,7 +269,7 @@ async def availableotts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await touch_user(u)
     if await is_banned(u.id):
         return
-    await update.message.reply_text(AVAILABLE_OTTS_TEXT)
+    await update.message.reply_text(AVAILABLE_OTTS_TEXT, parse_mode=ParseMode.HTML)
 
 
 async def show_product(q, key):
