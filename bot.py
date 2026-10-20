@@ -119,6 +119,16 @@ DURATION_CHOICES = [
 ]
 
 
+def norm_chat_id(v):
+    v = (v or "").strip().strip("\"'").strip()
+    if v.isdigit() and v.startswith("100") and len(v) >= 12:
+        v = "-" + v  # -100 wala minus bhoolne par auto-fix
+    try:
+        return int(v)
+    except ValueError:
+        return None
+
+
 def get_plan(pid):
     return next((p for p in PLANS if p["id"] == pid), None)
 
@@ -128,11 +138,7 @@ def pname(key):
 
 
 def channel_of(key):
-    v = os.getenv(PRODUCTS[key]["channel_env"], "").strip().strip("\"'").strip()
-    try:
-        return int(v)
-    except ValueError:
-        return None
+    return norm_chat_id(os.getenv(PRODUCTS[key]["channel_env"], ""))
 
 
 def all_channels():
@@ -280,11 +286,7 @@ def bye_text(name):
 
 # ---------------- Force join ----------------
 def force_channel():
-    v = os.getenv("FORCE_CHANNEL", "").strip().strip("\"'").strip()
-    try:
-        return int(v)
-    except ValueError:
-        return None
+    return norm_chat_id(os.getenv("FORCE_CHANNEL", ""))
 
 
 _force_link = {"v": os.getenv("FORCE_LINK", "").strip()}
@@ -361,10 +363,10 @@ async def forcecheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             lines.append("⚠️ Bot ko is channel mein ADMIN banao, warna force-join kaam nahi karega.")
     except Exception as e:
-        lines.append(f"❌ Error: {e}\\n(ID galat hai ya bot channel mein hai hi nahi)")
+        lines.append(f"❌ Error: {e}\n(ID galat hai ya bot channel mein hai hi nahi)")
     lines.append(f"Join link: {await get_force_link(context) or 'nahi bana (FORCE_LINK daalo)'}")
-    lines.append("\\nNote: admin accounts ko join prompt nahi dikhta. Test dusre account se karo.")
-    await update.message.reply_text("\\n".join(lines))
+    lines.append("\nNote: admin accounts ko join prompt nahi dikhta. Test dusre account se karo.")
+    await update.message.reply_text("\n".join(lines))
 
 
 async def on_force_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
