@@ -41,14 +41,14 @@ HOUR, DAY = 3600, 86400
 REMIND_DAYS = 2  # expiry se itne din pehle reminder
 
 # ---- /availableotts ka reply. Yahan badal do ----
-AVAILABLE_OTTS_TEXT = "📌AVAILABLE OTT's & Services
+AVAILABLE_OTTS_TEXT = '''📌AVAILABLE OTT's & Services
 "Alt Balaji" 🅰️
 "Aha" 🔶
 "Arey Digital" 🎬
 "Amazon Mini Tv" 📺
 "Bongo Tv" 🌐
 "Dangal-Play" 🟣
-"Discovery+" 🎱 
+"Discovery+" 🎱
 "Jio-Hotstar" 💠
 "Jio-Cinema" 🌸
 "NETFLIX" 🧧
@@ -60,7 +60,7 @@ AVAILABLE_OTTS_TEXT = "📌AVAILABLE OTT's & Services
 "Sun NXT" 🎃
 "ZEE 5" ♈️
 
-📌 Total = 17 OTT's 
+📌 Total = 17 OTT's
 
 
 
@@ -86,7 +86,8 @@ Example: ↓↓
 "Reality Show's"
 "Laughter Chef"
 "India's Got Talent"
-"All Other Shows" "
+"All Other Shows"
+'''
 
 # ---- Plans (price ₹ mein) ----
 PLANS = [
