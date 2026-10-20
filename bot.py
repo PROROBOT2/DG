@@ -22,6 +22,7 @@ from telegram.ext import (
     ChatMemberHandler,
     CommandHandler,
     ContextTypes,
+    ExtBot,
     MessageHandler,
     filters,
 )
@@ -143,6 +144,44 @@ def channel_of(key):
 
 def all_channels():
     return sorted({channel_of(k) for k in PRODUCTS if channel_of(k)})
+
+
+# ================================================================ AUTO CLEAN
+AUTO_DELETE_SECS = 300
+_bg_tasks = set()
+
+
+class PremiumBot(ExtBot):
+    """User ke private chat mein bheje gaye messages kuch der baad khud saaf ho jaate hain.
+    Admin chats aur auto_delete=False wale messages bache rehte hain."""
+
+    async def _delete_later(self, chat_id, message_id):
+        await asyncio.sleep(AUTO_DELETE_SECS)
+        try:
+            await self.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+
+    def _schedule(self, msg, auto_delete):
+        try:
+            cid = msg.chat_id
+            if not auto_delete or cid <= 0 or cid in ADMIN_IDS:
+                return
+            t = asyncio.get_running_loop().create_task(self._delete_later(cid, msg.message_id))
+            _bg_tasks.add(t)
+            t.add_done_callback(_bg_tasks.discard)
+        except Exception:
+            pass
+
+    async def send_message(self, *args, auto_delete=True, **kwargs):
+        msg = await super().send_message(*args, **kwargs)
+        self._schedule(msg, auto_delete)
+        return msg
+
+    async def send_photo(self, *args, auto_delete=True, **kwargs):
+        msg = await super().send_photo(*args, **kwargs)
+        self._schedule(msg, auto_delete)
+        return msg
 
 
 # ================================================================ DB
@@ -268,19 +307,18 @@ def home_text(name, thanks=False):
 
 
 JOIN_TEXT = (
-    "🔐 <b>Access Locked</b>\n\n"
-    "<blockquote>Bot use karne ke liye pehle hamare official channel ko join karna zaroori hai.</blockquote>\n\n"
-    "1️⃣ Neeche <b>Join Channel</b> dabayein\n"
-    "2️⃣ Channel join karein — bot aapko <b>automatically verify</b> kar dega ✅\n\n"
-    "<i>Join karte hi yahin welcome message aa jayega.</i>"
+    "🔐 <b>Members-Only Access</b>\n\n"
+    "<blockquote>Premium services sirf hamare official channel ke members ke liye available hain.</blockquote>\n\n"
+    "📢 Neeche <b>Join Official Channel</b> dabayein\n"
+    "✨ Join karte hi aapka access activate ho jayega"
 )
 
 
 def bye_text(name):
     return (
-        f"👋 <b>Goodbye, {esc(name or 'there')}!</b>\n\n"
-        "Aapne hamara channel leave kar diya, isliye bot access ab locked hai 🔒\n"
-        "Wapas aana ho to channel join karke /start bhejein — hum yahin hain 💎"
+        f"👋 <b>Goodbye, {esc(name or 'there')}</b>\n\n"
+        "Channel leave hote hi aapka access pause ho gaya hai 🔒\n"
+        "Jab chahein wapas join karke /start dabayein — hum yahin hain 💎"
     )
 
 
@@ -290,6 +328,25 @@ def force_channel():
 
 
 _force_link = {"v": os.getenv("FORCE_LINK", "").strip()}
+JOIN_PROMPTS = {}   # user_id -> [message_id]
+LAST_MENU = {}      # user_id -> welcome message_id
+
+
+async def purge_join_prompts(bot, uid):
+    for mid in JOIN_PROMPTS.pop(uid, []):
+        try:
+            await bot.delete_message(uid, mid)
+        except Exception:
+            pass
+
+
+async def drop_last_menu(bot, uid):
+    mid = LAST_MENU.pop(uid, None)
+    if mid:
+        try:
+            await bot.delete_message(uid, mid)
+        except Exception:
+            pass
 
 
 async def get_force_link(context):
@@ -327,16 +384,20 @@ async def ensure_joined(update, context):
     if not ch or is_admin(u.id):
         return True
     if await is_member(context, ch, u.id):
+        if u.id in JOIN_PROMPTS:
+            await purge_join_prompts(context.bot, u.id)
         return True
+    await purge_join_prompts(context.bot, u.id)
     link = await get_force_link(context)
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=link)]]) if link else None
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Official Channel", url=link)]]) if link else None
     q = update.callback_query
     if q:
         try:
             await q.answer("🔐 Pehle channel join karein", show_alert=True)
         except Exception:
             pass
-    await context.bot.send_message(u.id, JOIN_TEXT, reply_markup=kb, parse_mode=ParseMode.HTML)
+    m = await context.bot.send_message(u.id, JOIN_TEXT, reply_markup=kb, parse_mode=ParseMode.HTML)
+    JOIN_PROMPTS.setdefault(u.id, []).append(m.message_id)
     return False
 
 
@@ -385,10 +446,13 @@ async def on_force_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         if now_in and not was_in:
-            await context.bot.send_message(
+            await purge_join_prompts(context.bot, user.id)
+            await drop_last_menu(context.bot, user.id)
+            m = await context.bot.send_message(
                 user.id, home_text(user.first_name or user.full_name, thanks=True),
                 reply_markup=home_markup(), parse_mode=ParseMode.HTML,
             )
+            LAST_MENU[user.id] = m.message_id
         elif was_in and cm.new_chat_member.status == "left":
             await context.bot.send_message(
                 user.id, bye_text(user.first_name or user.full_name), parse_mode=ParseMode.HTML
@@ -414,9 +478,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_joined(update, context):
         return
     context.user_data.pop("buying", None)
-    await update.effective_message.reply_text(
+    await drop_last_menu(context.bot, u.id)
+    m = await update.effective_message.reply_text(
         home_text(u.first_name or u.full_name), reply_markup=home_markup(), parse_mode=ParseMode.HTML
     )
+    LAST_MENU[u.id] = m.message_id
+    try:
+        await update.effective_message.delete()
+    except Exception:
+        pass
 
 
 async def availableotts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -634,7 +704,7 @@ async def finalize(context, req_id, secs):
         note = f"\n⚠️ Invite link nahi bana: {e}\nManually bhejo: /resend {uid} {key}"
         text += "Admin aapko jaldi channel link bhej denge."
     try:
-        await context.bot.send_message(uid, text, parse_mode=ParseMode.HTML)
+        await context.bot.send_message(uid, text, parse_mode=ParseMode.HTML, auto_delete=False)
     except Exception as e:
         note += f"\n⚠️ User ko message nahi gaya: {e}"
 
@@ -677,6 +747,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 req["user_id"],
                 "❌ Aapka payment verify nahi ho paya. Sahi screenshot ke saath dobara try karein ya admin se contact karein.",
+                auto_delete=False,
             )
         except Exception:
             pass
@@ -777,7 +848,8 @@ async def resend_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ttl = min(DAY, sub["expiry_ts"] - now)
         link = await make_invite(context, key, ttl)
         await context.bot.send_message(
-            uid, f"🔗 {pname(key)} join link (sirf 1 banda, {link_ttl_text(ttl)} valid):\n{link}"
+            uid, f"🔗 {pname(key)} join link (sirf 1 banda, {link_ttl_text(ttl)} valid):\n{link}",
+            auto_delete=False,
         )
         await update.message.reply_text("Link bhej diya ✅")
     except Exception as e:
@@ -849,7 +921,7 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if reply:
                         await context.bot.copy_message(uid, reply.chat_id, reply.message_id)
                     else:
-                        await context.bot.send_message(uid, text)
+                        await context.bot.send_message(uid, text, auto_delete=False)
                     sent += 1
                     break
                 except RetryAfter as e:
@@ -910,7 +982,7 @@ async def expiry_job(context: ContextTypes.DEFAULT_TYPE):
                 r["user_id"],
                 f"⚠️ Aapka <b>{esc(pname(r['product']))}</b> subscription "
                 f"<b>{fmt(r['expiry_ts'])}</b> ko expire hoga. Renew kar lein!",
-                reply_markup=kb, parse_mode=ParseMode.HTML,
+                reply_markup=kb, parse_mode=ParseMode.HTML, auto_delete=False,
             )
         except Exception:
             pass
@@ -931,7 +1003,7 @@ async def expiry_job(context: ContextTypes.DEFAULT_TYPE):
                 uid,
                 f"⏰ Aapka <b>{esc(pname(key))}</b> subscription expire ho gaya hai.\n"
                 "Dobara access ke liye please <b>re-new your subscription</b> 👇",
-                reply_markup=kb, parse_mode=ParseMode.HTML,
+                reply_markup=kb, parse_mode=ParseMode.HTML, auto_delete=False,
             )
         except Exception:
             pass
@@ -975,7 +1047,7 @@ def start_health_server():
 def main():
     start_health_server()
     app = (
-        Application.builder().token(BOT_TOKEN)
+        Application.builder().bot(PremiumBot(BOT_TOKEN))
         .post_init(post_init).post_shutdown(post_shutdown).build()
     )
 
