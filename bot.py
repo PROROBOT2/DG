@@ -338,6 +338,35 @@ async def ensure_joined(update, context):
     return False
 
 
+async def forcecheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: force-join sahi set hai ya nahi, check karo."""
+    if not is_admin(update.effective_user.id):
+        return
+    raw = os.getenv("FORCE_CHANNEL")
+    ch = force_channel()
+    if not ch:
+        await update.message.reply_text(
+            f"❌ FORCE_CHANNEL set nahi hai ya galat hai (abhi value: {raw!r}).\n"
+            "Render → Environment mein -100 wali channel ID daalo, phir redeploy karo."
+        )
+        return
+    lines = [f"FORCE_CHANNEL: {ch}"]
+    try:
+        chat = await context.bot.get_chat(ch)
+        lines.append(f"Channel: {chat.title}")
+        me = await context.bot.get_chat_member(ch, context.bot.id)
+        lines.append(f"Bot status: {me.status}")
+        if me.status == "administrator":
+            lines.append("✅ Bot admin hai, force-join chalna chahiye.")
+        else:
+            lines.append("⚠️ Bot ko is channel mein ADMIN banao, warna force-join kaam nahi karega.")
+    except Exception as e:
+        lines.append(f"❌ Error: {e}\\n(ID galat hai ya bot channel mein hai hi nahi)")
+    lines.append(f"Join link: {await get_force_link(context) or 'nahi bana (FORCE_LINK daalo)'}")
+    lines.append("\\nNote: admin accounts ko join prompt nahi dikhta. Test dusre account se karo.")
+    await update.message.reply_text("\\n".join(lines))
+
+
 async def on_force_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Force channel mein join/leave hote hi bot khud message bhejta hai."""
     cm = update.chat_member
@@ -963,6 +992,7 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("setqr", setqr_cmd))
     app.add_handler(CommandHandler("removeqr", removeqr_cmd))
+    app.add_handler(CommandHandler("forcecheck", forcecheck_cmd))
 
     # buttons
     app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^(ap|chg|cd|dur|rj):"))
