@@ -19,6 +19,7 @@ from telegram.error import RetryAfter
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
+    ChatMemberHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -242,11 +243,132 @@ async def kick(context, uid, key):
 
 
 # ================================================================ USER SIDE
-HOME_TEXT = "👋 <b>Welcome!</b>\n\nNeeche se apna premium plan choose karein 👇"
+def home_text(name, thanks=False):
+    name = esc(name or "there")
+    head = (
+        f"🎉 <b>Thank you for joining, {name}!</b>\n✅ Verification complete\n\n"
+        if thanks
+        else f"✨ <b>Welcome, {name}!</b> ✨\n\n"
+    )
+    return (
+        head
+        + "<blockquote>💎 <b>Premium Access Hub</b>\n"
+        "Apna plan chunein aur access paayein — simple, fast aur secure.</blockquote>\n\n"
+        "⚡ Payment verify hote hi activation\n"
+        "🔒 Secure UPI payment\n"
+        "📺 /availableotts — kya-kya available hai dekhein\n\n"
+        "👇 <b>Neeche se apna plan choose karein</b>"
+    )
+
+
+JOIN_TEXT = (
+    "🔐 <b>Access Locked</b>\n\n"
+    "<blockquote>Bot use karne ke liye pehle hamare official channel ko join karna zaroori hai.</blockquote>\n\n"
+    "1️⃣ Neeche <b>Join Channel</b> dabayein\n"
+    "2️⃣ Channel join karein — bot aapko <b>automatically verify</b> kar dega ✅\n\n"
+    "<i>Join karte hi yahin welcome message aa jayega.</i>"
+)
+
+
+def bye_text(name):
+    return (
+        f"👋 <b>Goodbye, {esc(name or 'there')}!</b>\n\n"
+        "Aapne hamara channel leave kar diya, isliye bot access ab locked hai 🔒\n"
+        "Wapas aana ho to channel join karke /start bhejein — hum yahin hain 💎"
+    )
+
+
+# ---------------- Force join ----------------
+def force_channel():
+    v = os.getenv("FORCE_CHANNEL", "").strip().strip("\"'").strip()
+    try:
+        return int(v)
+    except ValueError:
+        return None
+
+
+_force_link = {"v": os.getenv("FORCE_LINK", "").strip()}
+
+
+async def get_force_link(context):
+    if _force_link["v"]:
+        return _force_link["v"]
+    ch = force_channel()
+    if not ch:
+        return None
+    try:
+        _force_link["v"] = await context.bot.export_chat_invite_link(ch)
+        return _force_link["v"]
+    except Exception as e:
+        log.warning("Force channel ka link nahi bana (FORCE_LINK set karo): %s", e)
+        return None
+
+
+def _in_status(status, is_member=None):
+    return status in ("creator", "administrator", "member") or (status == "restricted" and bool(is_member))
+
+
+async def is_member(context, ch, uid):
+    try:
+        m = await context.bot.get_chat_member(ch, uid)
+        return _in_status(m.status, getattr(m, "is_member", None))
+    except Exception as e:
+        # bot channel mein admin nahi / galat ID: user ko rokna nahi, bas log karo
+        log.warning("Force-join check fail (bot channel mein admin hai?): %s", e)
+        return True
+
+
+async def ensure_joined(update, context):
+    """True = aage badho. False = join prompt bhej diya."""
+    ch = force_channel()
+    u = update.effective_user
+    if not ch or is_admin(u.id):
+        return True
+    if await is_member(context, ch, u.id):
+        return True
+    link = await get_force_link(context)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=link)]]) if link else None
+    q = update.callback_query
+    if q:
+        try:
+            await q.answer("🔐 Pehle channel join karein", show_alert=True)
+        except Exception:
+            pass
+    await context.bot.send_message(u.id, JOIN_TEXT, reply_markup=kb, parse_mode=ParseMode.HTML)
+    return False
+
+
+async def on_force_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Force channel mein join/leave hote hi bot khud message bhejta hai."""
+    cm = update.chat_member
+    ch = force_channel()
+    if not cm or not ch or cm.chat.id != ch:
+        return
+    user = cm.new_chat_member.user
+    if user.is_bot:
+        return
+    was_in = _in_status(cm.old_chat_member.status, getattr(cm.old_chat_member, "is_member", None))
+    now_in = _in_status(cm.new_chat_member.status, getattr(cm.new_chat_member, "is_member", None))
+    # bot sirf unhe message kar sakta hai jinhone bot ko kabhi start kiya ho
+    if await db.users.find_one({"_id": user.id}) is None or await is_banned(user.id):
+        return
+    try:
+        if now_in and not was_in:
+            await context.bot.send_message(
+                user.id, home_text(user.first_name or user.full_name, thanks=True),
+                reply_markup=home_markup(), parse_mode=ParseMode.HTML,
+            )
+        elif was_in and cm.new_chat_member.status == "left":
+            await context.bot.send_message(
+                user.id, bye_text(user.first_name or user.full_name), parse_mode=ParseMode.HTML
+            )
+    except Exception as e:
+        log.info("Force-channel message nahi gaya %s: %s", user.id, e)
 
 
 def home_markup():
     rows = [[InlineKeyboardButton(p["name"], callback_data=f"p:{k}")] for k, p in PRODUCTS.items()]
+    rows.append([InlineKeyboardButton("📺 Available OTTs", callback_data="otts")])
     rows.append([InlineKeyboardButton("💬 Contact Admin", url=CONTACT_URL)])
     rows.append([InlineKeyboardButton("📋 My Subscriptions", callback_data="my")])
     return InlineKeyboardMarkup(rows)
@@ -258,9 +380,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await is_banned(u.id):
         await update.effective_message.reply_text("🚫 Aap is bot ko use nahi kar sakte.")
         return
+    if not await ensure_joined(update, context):
+        return
     context.user_data.pop("buying", None)
     await update.effective_message.reply_text(
-        HOME_TEXT, reply_markup=home_markup(), parse_mode=ParseMode.HTML
+        home_text(u.first_name or u.full_name), reply_markup=home_markup(), parse_mode=ParseMode.HTML
     )
 
 
@@ -268,6 +392,8 @@ async def availableotts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     await touch_user(u)
     if await is_banned(u.id):
+        return
+    if not await ensure_joined(update, context):
         return
     await update.message.reply_text(AVAILABLE_OTTS_TEXT, parse_mode=ParseMode.HTML)
 
@@ -325,6 +451,8 @@ async def user_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await is_banned(q.from_user.id):
         await q.answer("🚫 Aap banned hain", show_alert=True)
         return
+    if not await ensure_joined(update, context):
+        return
     data = q.data
 
     if data == "qr":
@@ -348,7 +476,12 @@ async def user_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "home":
         context.user_data.pop("buying", None)
-        await q.edit_message_text(HOME_TEXT, reply_markup=home_markup(), parse_mode=ParseMode.HTML)
+        await q.edit_message_text(
+            home_text(q.from_user.first_name or q.from_user.full_name),
+            reply_markup=home_markup(), parse_mode=ParseMode.HTML,
+        )
+    elif data == "otts":
+        await context.bot.send_message(q.from_user.id, AVAILABLE_OTTS_TEXT, parse_mode=ParseMode.HTML)
     elif data == "my":
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="home")]])
         await q.edit_message_text(await my_subs_text(q.from_user.id), reply_markup=kb, parse_mode=ParseMode.HTML)
@@ -365,6 +498,8 @@ async def user_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def mysubs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await touch_user(update.effective_user)
+    if await is_banned(update.effective_user.id) or not await ensure_joined(update, context):
+        return
     await update.message.reply_text(await my_subs_text(update.effective_user.id), parse_mode=ParseMode.HTML)
 
 
@@ -373,6 +508,8 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await is_banned(u.id):
         return
     await touch_user(u)
+    if not await ensure_joined(update, context):
+        return
     buying = context.user_data.get("buying")
     pl = get_plan(buying["plan"]) if buying else None
     if not buying or not pl:
@@ -528,6 +665,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not await is_banned(uid):
         await touch_user(update.effective_user)
+        if not await ensure_joined(update, context):
+            return
         await update.message.reply_text("/start dabake menu kholein.")
 
 
@@ -827,7 +966,10 @@ def main():
 
     # buttons
     app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^(ap|chg|cd|dur|rj):"))
-    app.add_handler(CallbackQueryHandler(user_cb, pattern=r"^(home|my|qr|p:.*|plan:.*)$"))
+    app.add_handler(CallbackQueryHandler(user_cb, pattern=r"^(home|my|otts|qr|p:.*|plan:.*)$"))
+
+    # force-channel join/leave tracking
+    app.add_handler(ChatMemberHandler(on_force_member, ChatMemberHandler.CHAT_MEMBER))
 
     # messages
     app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, on_photo))
