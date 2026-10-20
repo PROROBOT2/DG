@@ -36,7 +36,7 @@ MONGO_URI = os.environ["MONGO_URI"]
 MONGO_DB = os.getenv("MONGO_DB", "subbot")
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(",", " ").split() if x.isdigit()}
 UPI_ID = os.getenv("UPI_ID", "yourname@upi")
-CONTACT_URL = os.getenv("CONTACT_URL", "https://t.me/your_admin")
+CONTACT_URL = os.getenv("CONTACT_URL", "https://t.me/dghelps_bot")  # Admin Support button
 
 IST = ZoneInfo("Asia/Kolkata")
 HOUR, DAY = 3600, 86400
@@ -449,8 +449,8 @@ async def on_force_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await purge_join_prompts(context.bot, user.id)
             await drop_last_menu(context.bot, user.id)
             m = await context.bot.send_message(
-                user.id, home_text(user.first_name or user.full_name, thanks=True),
-                reply_markup=home_markup(), parse_mode=ParseMode.HTML,
+                user.id, start_text(user.first_name or user.full_name, thanks=True),
+                reply_markup=start_markup(), parse_mode=ParseMode.HTML,
             )
             LAST_MENU[user.id] = m.message_id
         elif was_in and cm.new_chat_member.status == "left":
@@ -462,11 +462,38 @@ async def on_force_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def home_markup():
+    """'Available Sources' screen: products + OTT list + my subscriptions."""
     rows = [[InlineKeyboardButton(p["name"], callback_data=f"p:{k}")] for k, p in PRODUCTS.items()]
     rows.append([InlineKeyboardButton("📺 Available OTTs", callback_data="otts")])
-    rows.append([InlineKeyboardButton("💬 Contact Admin", url=CONTACT_URL)])
     rows.append([InlineKeyboardButton("📋 My Subscriptions", callback_data="my")])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="start")])
     return InlineKeyboardMarkup(rows)
+
+
+def start_text(name, thanks=False):
+    """/start par dikhne wala chhota welcome."""
+    name = esc(name or "there")
+    head = (
+        f"🎉 <b>Thank you for joining, {name}!</b>\n✅ Verification complete"
+        if thanks
+        else f"✨ <b>Welcome, {name}!</b>"
+    )
+    return head + "\n\n<blockquote>💎 Premium services mein aapka swagat hai.</blockquote>\n\n👇 Neeche se option choose karein"
+
+
+def start_markup():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📂 Available Sources", callback_data="src")],
+        [InlineKeyboardButton("🌐 Terms & Conditions", callback_data="terms")],
+        [InlineKeyboardButton("🛟 Admin Support", url=CONTACT_URL)],
+    ])
+
+
+# Terms & Conditions: abhi blank. Apna text yahan "..." ke andar likho.
+TERMS_TEXT = (
+    "🌐 <b>Terms &amp; Conditions</b>\n\n"
+    ""
+)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -480,7 +507,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("buying", None)
     await drop_last_menu(context.bot, u.id)
     m = await update.effective_message.reply_text(
-        home_text(u.first_name or u.full_name), reply_markup=home_markup(), parse_mode=ParseMode.HTML
+        start_text(u.first_name or u.full_name), reply_markup=start_markup(), parse_mode=ParseMode.HTML
     )
     LAST_MENU[u.id] = m.message_id
     try:
@@ -575,12 +602,21 @@ async def user_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     await touch_user(q.from_user)
 
-    if data == "home":
+    if data in ("home", "src"):
         context.user_data.pop("buying", None)
         await q.edit_message_text(
             home_text(q.from_user.first_name or q.from_user.full_name),
             reply_markup=home_markup(), parse_mode=ParseMode.HTML,
         )
+    elif data == "start":
+        context.user_data.pop("buying", None)
+        await q.edit_message_text(
+            start_text(q.from_user.first_name or q.from_user.full_name),
+            reply_markup=start_markup(), parse_mode=ParseMode.HTML,
+        )
+    elif data == "terms":
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="start")]])
+        await q.edit_message_text(TERMS_TEXT, reply_markup=kb, parse_mode=ParseMode.HTML)
     elif data == "otts":
         await context.bot.send_message(q.from_user.id, AVAILABLE_OTTS_TEXT, parse_mode=ParseMode.HTML)
     elif data == "my":
@@ -1070,7 +1106,7 @@ def main():
 
     # buttons
     app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^(ap|chg|cd|dur|rj):"))
-    app.add_handler(CallbackQueryHandler(user_cb, pattern=r"^(home|my|otts|qr|p:.*|plan:.*)$"))
+    app.add_handler(CallbackQueryHandler(user_cb, pattern=r"^(home|src|start|terms|my|otts|qr|p:.*|plan:.*)$"))
 
     # force-channel join/leave tracking
     app.add_handler(ChatMemberHandler(on_force_member, ChatMemberHandler.CHAT_MEMBER))
