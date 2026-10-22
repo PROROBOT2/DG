@@ -490,7 +490,17 @@ def start_text(name, thanks=False):
         if thanks
         else f"✨ <b>Welcome, {name}!</b>"
     )
-    return head + "\n\n<blockquote>💎 Premium services mein aapka swagat hai.</blockquote>\n\n👇 Neeche se option choose karein"
+    return (
+        head
+        + "\n\n"
+        + f"💎 Welcome, {name}! Kese Ho Aap 😁\n"
+        + "• 🕺 Seamless Entertainment Hub 📡\n"
+        + "• 💫 15 Million+ Content Served in 6 Years\n"
+        + "• ⚡ Engineered for Excellence. Built to Outperform.\n"
+        + "• ✅ Original Premium Quality (RAW Quality)\n\n"
+        + '🛡️ Developed By: DMT BOTS (https://t.me/DMTBOTS)'
+        + "\n\n👇 Neeche se option choose karein"
+    )
 
 
 def start_markup(support=True):
