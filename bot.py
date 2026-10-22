@@ -73,10 +73,7 @@ AVAILABLE_OTTS_TEXT = '''<pre>📌AVAILABLE OTT's &amp; Services</pre>
 "SONY LIV" 🟣
 "Sun NXT" 🎃
 "ZEE 5" ♈️
-
-📌 Total = 17 OTT's
-
-
+<blockquote>📌 Total = 17 OTT's<blockquote>
 
 
 <blockquote>👾ALL Daily Shows 👾</blockquote>
@@ -518,14 +515,14 @@ def start_markup(support=True):
 # Terms & Conditions: abhi blank. Apna text yahan "..." ke andar likho.
 TERMS_TEXT = (
     "🌐 <b>Terms &amp; Conditions/n"
-    "Read Carefully/n"
- • Here Of Your Purchase Top-Up/ Primium Plan You'll  Easily Access Ur Content "24×7" Till You Have Subscription./n"
-• There Is a Limited Stock Of Entertainment Package In Which :- HDTC - Fiilms / OTT-Realeses /Web-Seriies / TV-Shhows / TV Seriials are Included./n"
-• Dear User If You Have Any Other Queries/Problem U-Can Directly Contact 
-@DGHelps_Bot (Our 24×7 Support Chat)/n"
-Thanks regards/n" 
-© copyright holder I'd 8763xxxx/n"
-® Registered Tezstudus.In co/n"
+"Read Carefully/n"
+"<blockquote>• Here Of Your Purchase Top-Up/ Primium Plan You'll  Easily Access Ur Content "24×7" Till You Have Subscription./n"
+"• There Is a Limited Stock Of Entertainment Package In Which :- HDTC - Fiilms / OTT-Realeses /Web-Seriies / TV-Shhows / TV Seriials are Included./n"
+"• Dear User If You Have Any Other Queries/Problem U-Can Directly Contact/n"
+"@DGHelps_Bot (Our 24×7 Support Chat)/n"
+"Thanks regards/n" 
+"© copyright holder I'd 8763xxxx/n"
+"® Registered Tezstudus.In co<blockquote>"
 ﻿</b>\n\n"
     ""
 )
