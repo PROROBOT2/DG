@@ -493,13 +493,15 @@ def start_text(name, thanks=False):
     return (
         head
         + "\n\n"
-        + f"💎 Welcome, {name}! Kese Ho Aap 😁\n"
-        + "• 🕺 Seamless Entertainment Hub 📡\n"
-        + "• 💫 15 Million+ Content Served in 6 Years\n"
-        + "• ⚡ Engineered for Excellence. Built to Outperform.\n"
-        + "• ✅ Original Premium Quality (RAW Quality)\n\n"
-        + '🛡️ Developed By: DMT BOTS (https://t.me/DMTBOTS)'
-        + "\n\n👇 Neeche se option choose karein"
+        + f"💎 WELCOME, {name}! Kese Ho Aap 😁\n"
+        + "\n\n"
+        + " <b>WHAT WE PROViDES ?<b>\n"
+        + "<b>• A Seamless Entertainment🕺Hub 📡\n"
+        + "• 15 Million+💫 Content Served Over (6 Years)\n"
+        + "• For Those Who Belive in Experience⚡& Quality..\n"
+        + "• All Populor OTTs\n\n"
+        + '🛡️ Developed By: DMT BOTS (https://t.me/DMTBOTS)<b>'
+        + "\n\n👇 Select Option To Continue "
     )
 
 
@@ -515,7 +517,16 @@ def start_markup(support=True):
 
 # Terms & Conditions: abhi blank. Apna text yahan "..." ke andar likho.
 TERMS_TEXT = (
-    "🌐 <b>Terms &amp; Conditions</b>\n\n"
+    "🌐 <b>Terms &amp; Conditions/n"
+    "Read Carefully/n"
+ • Here Of Your Purchase Top-Up/ Primium Plan You'll  Easily Access Ur Content "24×7" Till You Have Subscription./n"
+• There Is a Limited Stock Of Entertainment Package In Which :- HDTC - Fiilms / OTT-Realeses /Web-Seriies / TV-Shhows / TV Seriials are Included./n"
+• Dear User If You Have Any Other Queries/Problem U-Can Directly Contact 
+@DGHelps_Bot (Our 24×7 Support Chat)/n"
+Thanks regards/n" 
+© copyright holder I'd 8763xxxx/n"
+® Registered Tezstudus.In co/n"
+﻿</b>\n\n"
     ""
 )
 
