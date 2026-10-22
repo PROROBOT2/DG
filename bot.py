@@ -458,11 +458,29 @@ async def my_subs_text(user_id):
 
 async def show_product(query, key):
     product = PRODUCTS[key]
-    text = (
-        f"🎗 <b>VIP ACCESS PLANS</b> 🎗\n<b>{esc(product['name'])}</b>\n\n"
-        f"📜 <b>Terms:</b>\n{esc(product['terms'])}\n\n"
-        "👇 Choose a plan"
-    )
+
+    if key == "movies":
+        description = (
+            "🚧 <b>Note:</b>\n\n"
+            "<b>• Request Admins For Content ✅</b>\n"
+            "<b>• Old + New-Releases 📻💥</b>\n"
+            "<b>• Valid For Movies/Web-Series Only.💈</b>\n"
+            "<i>-T&C Apply.</i>\n\n"
+            "                      <b>Select Your Plan 👇</b>"
+        )
+    else:
+        description = (
+            "🚧 <b>Note:</b>\n\n"
+            "<b>• Hi-Res (Audio's), WAV, FLAC, DIGI-FLAC , M4A , LOSSLESS✅.</b>\n"
+            "<b>• Old + New-Releases ALL 📻💥.</b>\n"
+            "<b>• CD-Rips , WAV ,Digital Dolby 5.1 % 7.1 QLTY Only For Movies.</b>\n\n"
+            "<blockquote><b>• Why Audio Quality Matters</b>\n"
+            "<i>• On Expensive/Big Sound Systems, Low-Quality Files Lose Their Punch, Bass Turns Muddy, Highs Sounds Dull, and The Whole Track Feels Flat. High-Quality Audio Keeps The Full Bass, Mid and High Range Intact, Giving Your Set More Energy, Clarity and Presence.</i>\n"
+            "<b>• Only 1 File Provided For Quality Check Sample.</b></blockquote>\n\n"
+            "<i>-T&C Apply.</i>\n\n"
+            "                      <b>Select Your Plan 👇</b>"
+        )
+    text = f"🎗 <b>VIP ACCESS PLANS</b> 🎗\n<b>{esc(product['name'])}</b>\n\n{description}"
     rows = [
         [InlineKeyboardButton(
             f"{plan['label']} — ₹{plan['price']}",
