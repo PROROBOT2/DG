@@ -377,10 +377,7 @@ def home_text(name, thanks=False):
     )
     return (
         heading
-        + "<blockquote>💎 <b>🚧 Note:</b>\n"
-        "• Request Admins For Content ✅\n"
-        "• Old + New-Releases 📻💥\n"
-        "• Valid For Movies/Web-Series Only. 💈</blockquote>\n\n"
+        + "<blockquote>💎 <b>Select Your Service</b></blockquote>\n\n"
         "<i>- T&C Apply.</i>\n\n"
         "👇 <b>Select Your Plan 👇</b>"
     )
@@ -462,10 +459,10 @@ async def show_product(query, key):
 
     if key == "movies":
         description = (
-            "🚧 <b>Note:</b>\n\n"
-            "<b>• Request Admins For Content ✅</b>\n"
+            "<blockquote> <b>🚧 Note:-</b> </blockquote>\n\n"
+            "<b><i>• Request Admins For Content ✅</b>\n"
             "<b>• Old + New-Releases 📻💥</b>\n"
-            "<b>• Valid For Movies/Web-Series Only.💈</b>\n"
+            "<b>• Valid For Movies/Web-Series Only💈.</i></b>\n"
             "<i>-T&C Apply.</i>\n\n"
             "                      <b>Select Your Plan 👇</b>"
         )
