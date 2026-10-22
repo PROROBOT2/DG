@@ -377,9 +377,10 @@ def home_text(name, thanks=False):
     )
     return (
         heading
-        + "<blockquote>💎 <b>Select Your Service</b></blockquote>\n\n"
-        "<i>- T&C Apply.</i>\n\n"
-        "👇 <b>Select Your Plan 👇</b>"
+        + "<blockquote>✨ <b>Choose a premium service to continue.</b>\n"
+        "Secure access. Clear plans. Quality content.</blockquote>\n\n"
+        "<i>Terms &amp; conditions apply.</i>\n\n"
+        "👇 <b>Select your plan</b>"
     )
 def start_markup(support=True):
     rows = [
@@ -396,8 +397,7 @@ def home_markup():
         for key, p in PRODUCTS.items()
     ]
     rows += [
-        [InlineKeyboardButton("📺 Available OTTs", callback_data="otts")],
-        [InlineKeyboardButton("📋 My Subscriptions", callback_data="my")],
+        [InlineKeyboardButton("🔎 Check Your Active Plan", callback_data="my")],
         [InlineKeyboardButton("⬅️ Back", callback_data="start")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -459,12 +459,12 @@ async def show_product(query, key):
 
     if key == "movies":
         description = (
-            "<blockquote> <b>🚧 Note:-</b> </blockquote>\n\n"
-            "<b><i>• Request Admins For Content ✅</b>\n"
-            "<b>• Old + New-Releases 📻💥</b>\n"
-            "<b>• Valid For Movies/Web-Series Only💈.</i></b>\n"
-            "<i>-T&C Apply.</i>\n\n"
-            "                      <b>Select Your Plan 👇</b>"
+            "<blockquote><b>📌 Service Details</b>\n\n"
+            "• Request titles from our admins ✅\n"
+            "• Classic favourites &amp; new releases 🎬\n"
+            "• For movies and web series only</blockquote>\n\n"
+            "<i>Terms &amp; conditions apply.</i>\n\n"
+            "👇 <b>Select your plan</b>"
         )
     else:
         description = (
