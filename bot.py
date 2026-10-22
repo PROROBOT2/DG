@@ -474,7 +474,7 @@ async def on_force_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def home_markup():
-    """'Available Sources' screen: products + OTT list + my subscriptions."""
+    """'Available Services' screen: products + OTT list + my subscriptions."""
     rows = [[InlineKeyboardButton(p["name"], callback_data=f"p:{k}")] for k, p in PRODUCTS.items()]
     rows.append([InlineKeyboardButton("📺 Available OTTs", callback_data="otts")])
     rows.append([InlineKeyboardButton("📋 My Subscriptions", callback_data="my")])
@@ -495,7 +495,7 @@ def start_text(name, thanks=False):
 
 def start_markup(support=True):
     rows = [
-        [InlineKeyboardButton("📂 Available Sources", callback_data="src")],
+        [InlineKeyboardButton("📂 Available Services", callback_data="src")],
         [InlineKeyboardButton("🌐 Terms & Conditions", callback_data="terms")],
     ]
     if support:
