@@ -348,28 +348,32 @@ async def ensure_joined(update, context):
 
 # ----------------------------- MENUS -----------------------------
 def start_text(name, thanks=False):
+    """Build the single welcome/start screen using Telegram HTML formatting."""
     name = esc(name or "there")
-    head = (
-        f"🎉 <b>Thank you for joining, {name}!</b>\n✅ Verification complete"
-        if thanks else f"✨ <b>Welcome, {name}!</b> ✨"
-    )
+    if thanks:
+        head = (
+            f"🎉 <b>Thank you for joining, {name}!</b>\n"
+            "✅ Verification complete"
+        )
+    else:
+        head = f"Hey 👋, <b>{name}!</b>\n<b>Welcome To DMT Services</b>"
+
     return (
         f"{head}\n\n"
-        f"💎 <b>WELCOME, {name}! Kese Ho Aap 😁</b>\n\n"
-        "<blockquote><b>WHAT WE PROVIDE</b>\n\n"
-        "• 🕺 A Seamless Entertainment Hub 📡\n"
-        "• 💫 15 Million+ Content Served Over 6 Years\n"
-        "• ⚡ Experience &amp; Quality\n"
-        "• 📺 Multiple OTT Services</blockquote>\n\n"
-        '🛡️ Developed By: <a href="https://t.me/DMTBOTS">DMT BOTS</a>\n\n'
-        "👇 <b>Select an option to continue</b>"
+        "<blockquote><b>➡️ WHY CHOOSiNG US ❓</b>\n"
+        "<i>(Our Speciality)</i>\n\n"
+        "• A Seamless Entertainment Hub 📡\n"
+        "• Provides Experience ⚡️ &amp; Quality</blockquote>\n\n"
+        '🧑‍💻 <b>Developed By:</b> '
+        '<a href="https://t.me/DMT_BOTS">DMT BOTS</a>\n\n'
+        "👇 <i>Select Option To Continue.</i>"
     )
 
 def home_text(name, thanks=False):
     name = esc(name or "there")
     heading = (
         f"🎉 <b>Thank you for joining, {name}!</b>\n✅ Verification complete\n\n"
-        if thanks else f"✨ <b>Welcome, {name}!</b> ✨\n\n"
+        if thanks else "💎 <b>Premium Access Hub</b>\n\n"
     )
     return (
         heading + "<blockquote>💎 <b>Premium Access Hub</b>\n"
