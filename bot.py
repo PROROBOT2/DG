@@ -1,8 +1,6 @@
-"""Premium subscription Telegram bot.
-
-Flow: user plan chunta hai -> UPI/QR se pay karke screenshot bhejta hai ->
-admin approve karta hai -> user ko 1-use invite link milta hai ->
-expiry par bot khud channel se hata deta hai.
+"""Premium Telegram subscription bot.
+Features: plans, UPI/QR payment screenshots, admin approval, one-use invite links,
+MongoDB subscriptions, expiry/reminders, force-join, admin tools and /availableotts.
 """
 import asyncio
 import html
@@ -17,153 +15,184 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter
 from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    ChatMemberHandler,
-    CommandHandler,
-    ContextTypes,
-    ExtBot,
-    MessageHandler,
-    filters,
+    Application, CallbackQueryHandler, ChatMemberHandler, CommandHandler,
+    ContextTypes, ExtBot, MessageHandler, filters,
 )
 
-logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO
+)
 log = logging.getLogger("subbot")
 
-# ================================================================ CONFIG
+# ----------------------------- CONFIG -----------------------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 MONGO_URI = os.environ["MONGO_URI"]
 MONGO_DB = os.getenv("MONGO_DB", "subbot")
-ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(",", " ").split() if x.isdigit()}
+ADMIN_IDS = {
+    int(x) for x in os.getenv("ADMIN_IDS", "").replace(",", " ").split()
+    if x.isdigit()
+}
 UPI_ID = os.getenv("UPI_ID", "yourname@upi")
-def norm_url(u, default=""):
-    """Telegram button ke liye URL theek karo: '@name' / 't.me/name' / 'name.com' -> https://..."""
-    u = (u or "").strip().strip("\"'").strip()
-    if not u:
-        return default
-    if u.startswith("@"):
-        return "https://t.me/" + u[1:]
-    if u.startswith(("http://", "https://", "tg://")):
-        return u
-    return "https://" + u
-
-
-CONTACT_URL = norm_url(os.getenv("CONTACT_URL"), "https://t.me/dghelps_bot")  # Admin Support button
-
 IST = ZoneInfo("Asia/Kolkata")
 HOUR, DAY = 3600, 86400
-REMIND_DAYS = 2  # expiry se itne din pehle reminder
+REMIND_DAYS = 2
+AUTO_DELETE_SECS = 300
+_bg_tasks = set()
 
-# ---- /availableotts ka reply. Yahan badal do ----
-AVAILABLE_OTTS_TEXT = '''<pre>📌AVAILABLE OTT's &amp; Services</pre>
-"Alt Balaji" 🅰️
-"Aha" 🔶
-"Arey Digital" 🎬
-"Amazon Mini Tv" 📺
-"Bongo Tv" 🌐
-"Dangal-Play" 🟣
-"Discovery+" 🎱
-"Jio-Hotstar" 💠
-"Jio-Cinema" 🌸
-"NETFLIX" 🧧
-"Pocket FM" 🀄️
-"Prime Video" 🔵
-"STAGE" 🌀
-"SHEMAROO ME" 📽
-"SONY LIV" 🟣
-"Sun NXT" 🎃
-"ZEE 5" ♈️
-<blockquote>📌 Total = 17 OTT's<blockquote>
+def norm_url(value, default=""):
+    value = (value or "").strip().strip("\"'").strip()
+    if not value:
+        return default
+    if value.startswith("@"):
+        return "https://t.me/" + value[1:]
+    if value.startswith(("https://", "http://", "tg://")):
+        return value
+    return "https://" + value
 
+CONTACT_URL = norm_url(os.getenv("CONTACT_URL"), "https://t.me/dghelps_bot")
+_force_link = {"v": norm_url(os.getenv("FORCE_LINK"))}
 
-<blockquote>👾ALL Daily Shows 👾</blockquote>
-"TV SHOWS"🌈
-"Colors"
-"Dangal-Play"
-"Jio-Hotstar"
-"SonyLivv" ☘️
-"Sun NXT"
-"ZEE-5"
+def norm_chat_id(value):
+    value = (value or "").strip().strip("\"'").strip()
+    if value.isdigit() and value.startswith("100") and len(value) >= 12:
+        value = "-" + value
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
 
-<blockquote><i>Example: ↓↓</i></blockquote>
-"Taarak Mehta"
-"Bigg Boss"
-"New-CiD S03"
-"Pushpa Impossible"
-"Kumkum Bhagya"
-"All Other On-going Shows"
-
-<blockquote>Weekly Releases Show's ⚡️</blockquote>
-"Reality Show's"
-"Laughter Chef"
-"India's Got Talent"
-"All Other Shows"
-'''
-
-# ---- Plans (price ₹ mein) ----
+PRODUCTS = {
+    "movies": {
+        "name": "🎬 Movies Premium",
+        "terms": "• Payment non-refundable as per stated policy\n• Personal use only\n• Sharing invite links is prohibited",
+        "channel_env": "CH_MOVIES",
+    },
+    "music": {
+        "name": "🎧 Music Premium",
+        "terms": "• Payment non-refundable as per stated policy\n• Personal use only\n• Sharing invite links is prohibited",
+        "channel_env": "CH_MUSIC",
+    },
+}
 PLANS = [
     {"id": "60d", "label": "🥇 60 Days", "secs": 60 * DAY, "price": 79},
     {"id": "30d", "label": "🥈 30 Days", "secs": 30 * DAY, "price": 39},
     {"id": "7d", "label": "🥉 7 Days", "secs": 7 * DAY, "price": 19},
     {"id": "3h", "label": "⚜️ 3 Hours", "secs": 3 * HOUR, "price": 9},
 ]
-
-# ---- Products. channel_env = us channel ki ID jis env variable mein hogi ----
-PRODUCTS = {
-    "movies": {
-        "name": "🎬 Movies Premium",
-        "terms": "• Payment non-refundable\n• Sirf personal use\n• Link share karna mana hai",
-        "channel_env": "CH_MOVIES",
-    },
-    "music": {
-        "name": "🎧 Music Premium",
-        "terms": "• Payment non-refundable\n• Sirf personal use\n• Link share karna mana hai",
-        "channel_env": "CH_MUSIC",
-    },
-}
-
-# Admin "Change duration" ke options
 DURATION_CHOICES = [
-    (3 * HOUR, "3h"), (7 * DAY, "7d"), (15 * DAY, "15d"), (30 * DAY, "30d"),
-    (60 * DAY, "60d"), (90 * DAY, "90d"), (180 * DAY, "180d"), (365 * DAY, "365d"),
+    (3 * HOUR, "3h"), (7 * DAY, "7d"), (15 * DAY, "15d"),
+    (30 * DAY, "30d"), (60 * DAY, "60d"), (90 * DAY, "90d"),
+    (180 * DAY, "180d"), (365 * DAY, "365d"),
 ]
 
+AVAILABLE_OTTS_TEXT = """<pre>📌 AVAILABLE OTTs &amp; Services</pre>
+"Alt Balaji" 🅰️
+"Aha" 🔶
+"Arey Digital" 🎬
+"Amazon Mini TV" 📺
+"Bongo TV" 🌐
+"Dangal Play" 🟣
+"Discovery+" 🎱
+"JioHotstar" 💠
+"JioCinema" 🌸
+"Netflix" 🧧
+"Pocket FM" 🀄️
+"Prime Video" 🔵
+"STAGE" 🌀
+"ShemarooMe" 📽
+"SonyLIV" 🟣
+"Sun NXT" 🎃
+"ZEE5" ♈️
 
-def norm_chat_id(v):
-    v = (v or "").strip().strip("\"'").strip()
-    if v.isdigit() and v.startswith("100") and len(v) >= 12:
-        v = "-" + v  # -100 wala minus bhoolne par auto-fix
-    try:
-        return int(v)
-    except ValueError:
-        return None
+<blockquote>📌 Total = 17 OTTs</blockquote>
 
+<blockquote>👾 ALL Daily Shows 👾</blockquote>
+TV SHOWS 🌈
+Colors
+Dangal Play
+JioHotstar
+SonyLIV ☘️
+Sun NXT
+ZEE5
+
+<blockquote><i>Examples:</i>
+Taarak Mehta
+Bigg Boss
+New-CID S03
+Pushpa Impossible
+Kumkum Bhagya
+All other ongoing shows</blockquote>
+
+<blockquote>⚡ Weekly Releases
+Reality Shows
+Laughter Chef
+India's Got Talent
+All other shows</blockquote>"""
+
+TERMS_TEXT = (
+    "🌐 <b>Terms &amp; Conditions</b>\n\n"
+    "<blockquote>"
+    "• Access remains available until the subscription expiry shown by the bot.\n\n"
+    "• Content availability and quality may vary by source.\n\n"
+    "• Do not share account details or invite links.\n\n"
+    "• Access is activated after payment verification.\n\n"
+    "• Please confirm the refund policy before paying.\n\n"
+    "• Contact support for questions or issues."
+    "</blockquote>\n\n"
+    "🛟 <b>Support:</b> @DGHelps_Bot\n"
+    "© All rights reserved."
+)
+
+# ----------------------------- HELPERS -----------------------------
+def esc(value):
+    return html.escape(str(value) if value is not None else "")
+
+def is_admin(uid):
+    return uid in ADMIN_IDS
 
 def get_plan(pid):
     return next((p for p in PLANS if p["id"] == pid), None)
 
-
 def pname(key):
     return PRODUCTS.get(key, {}).get("name", key)
-
 
 def channel_of(key):
     return norm_chat_id(os.getenv(PRODUCTS[key]["channel_env"], ""))
 
-
 def all_channels():
     return sorted({channel_of(k) for k in PRODUCTS if channel_of(k)})
 
+def fmt(ts):
+    return datetime.fromtimestamp(ts, IST).strftime("%d %b %Y, %I:%M %p")
 
-# ================================================================ AUTO CLEAN
-AUTO_DELETE_SECS = 300
-_bg_tasks = set()
+def fmt_dur(secs):
+    if secs < DAY:
+        return f"{max(1, secs // HOUR)} Hours"
+    return f"{secs // DAY} Days"
 
+def fmt_left(secs):
+    if secs >= DAY:
+        return f"{secs // DAY} days"
+    if secs >= HOUR:
+        return f"{secs // HOUR} hours"
+    return f"{max(1, secs // 60)} minutes"
 
+async def is_banned(uid):
+    if is_admin(uid):
+        return False
+    return await db.banned.find_one({"_id": uid}) is not None
+
+async def touch_user(user):
+    now = int(time.time())
+    await db.users.update_one(
+        {"_id": user.id},
+        {"$set": {"username": user.username, "full_name": user.full_name, "last_seen": now},
+         "$setOnInsert": {"first_seen": now}},
+        upsert=True,
+    )
+
+# ----------------------------- AUTO-DELETE BOT -----------------------------
 class PremiumBot(ExtBot):
-    """User ke private chat mein bheje gaye messages kuch der baad khud saaf ho jaate hain.
-    Admin chats aur auto_delete=False wale messages bache rehte hain."""
-
     async def _delete_later(self, chat_id, message_id):
         await asyncio.sleep(AUTO_DELETE_SECS)
         try:
@@ -173,14 +202,15 @@ class PremiumBot(ExtBot):
 
     def _schedule(self, msg, auto_delete):
         try:
-            cid = msg.chat_id
-            if not auto_delete or cid <= 0 or cid in ADMIN_IDS:
+            if not auto_delete or msg.chat_id <= 0 or msg.chat_id in ADMIN_IDS:
                 return
-            t = asyncio.get_running_loop().create_task(self._delete_later(cid, msg.message_id))
-            _bg_tasks.add(t)
-            t.add_done_callback(_bg_tasks.discard)
+            task = asyncio.get_running_loop().create_task(
+                self._delete_later(msg.chat_id, msg.message_id)
+            )
+            _bg_tasks.add(task)
+            task.add_done_callback(_bg_tasks.discard)
         except Exception:
-            pass
+            log.exception("Could not schedule auto-delete")
 
     async def send_message(self, *args, auto_delete=True, **kwargs):
         msg = await super().send_message(*args, **kwargs)
@@ -192,11 +222,9 @@ class PremiumBot(ExtBot):
         self._schedule(msg, auto_delete)
         return msg
 
-
-# ================================================================ DB
+# ----------------------------- DATABASE -----------------------------
 client = None
 db = None
-
 
 async def post_init(app):
     global client, db
@@ -205,11 +233,9 @@ async def post_init(app):
     await client.admin.command("ping")
     log.info("MongoDB connected (db=%s)", MONGO_DB)
 
-
 async def post_shutdown(app):
     if client is not None:
         await client.close()
-
 
 async def next_req_id():
     doc = await db.counters.find_one_and_update(
@@ -218,128 +244,67 @@ async def next_req_id():
     )
     return doc["seq"]
 
-
 async def get_setting(key):
-    r = await db.settings.find_one({"_id": key})
-    return r["value"] if r else None
-
+    result = await db.settings.find_one({"_id": key})
+    return result.get("value") if result else None
 
 async def set_setting(key, value):
-    await db.settings.update_one({"_id": key}, {"$set": {"value": value}}, upsert=True)
-
-
-async def touch_user(u):
-    now = int(time.time())
-    await db.users.update_one(
-        {"_id": u.id},
-        {"$set": {"username": u.username, "full_name": u.full_name, "last_seen": now},
-         "$setOnInsert": {"first_seen": now}},
-        upsert=True,
+    await db.settings.update_one(
+        {"_id": key}, {"$set": {"value": value}}, upsert=True
     )
 
-
-# ================================================================ HELPERS
-def fmt(ts):
-    return datetime.fromtimestamp(ts, IST).strftime("%d %b %Y, %I:%M %p")
-
-
-def fmt_dur(secs):
-    return f"{max(1, secs // HOUR)} Hours" if secs < DAY else f"{secs // DAY} Days"
-
-
-def fmt_left(secs):
-    if secs >= DAY:
-        return f"{secs // DAY} din"
-    if secs >= HOUR:
-        return f"{secs // HOUR} ghante"
-    return f"{max(1, secs // 60)} minute"
-
-
-def esc(s):
-    return html.escape(str(s) if s is not None else "")
-
-
-def is_admin(uid):
-    return uid in ADMIN_IDS
-
-
-async def is_banned(uid):
-    if is_admin(uid):
-        return False
-    return await db.banned.find_one({"_id": uid}) is not None
-
-
-async def make_invite(context, key, ttl=DAY):
-    ch = channel_of(key)
-    if not ch:
-        raise RuntimeError(f"{PRODUCTS[key]['channel_env']} set nahi hai ya galat hai")
-    link = await context.bot.create_chat_invite_link(
-        ch, member_limit=1,
-        expire_date=datetime.now(timezone.utc) + timedelta(seconds=max(ttl, 60)),
-    )
-    return link.invite_link
-
-
-def link_ttl_text(ttl):
-    return f"{max(1, ttl // HOUR)} ghante" if ttl >= HOUR else "kuch minute"
-
-
-async def kick(context, uid, key):
-    ch = channel_of(key)
-    if not ch:
-        return
-    try:
-        await context.bot.ban_chat_member(ch, uid)
-        # unban taaki renew karne par wapas join kar sake
-        await context.bot.unban_chat_member(ch, uid, only_if_banned=True)
-    except Exception as e:
-        log.warning("Kick fail %s/%s: %s", uid, key, e)
-
-
-# ================================================================ USER SIDE
-def home_text(name, thanks=False):
-    name = esc(name or "there")
-    head = (
-        f"🎉 <b>Thank you for joining, {name}!</b>\n✅ Verification complete\n\n"
-        if thanks
-        else f"✨ <b>Welcome, {name}!</b> ✨\n\n"
-    )
-    return (
-        head
-        + "<blockquote>💎 <b>Premium Access Hub</b>\n"
-        "Apna plan chunein aur access paayein — simple, fast aur secure.</blockquote>\n\n"
-        "⚡ Payment verify hote hi activation\n"
-        "🔒 Secure UPI payment\n"
-        "📺 /availableotts — kya-kya available hai dekhein\n\n"
-        "👇 <b>Neeche se apna plan choose karein</b>"
-    )
-
-
-JOIN_TEXT = (
-    "🔐 <b>Members-Only Access</b>\n\n"
-    "<blockquote>Premium services sirf hamare official channel ke members ke liye available hain.</blockquote>\n\n"
-    "📢 Neeche <b>Join Official Channel</b> dabayein\n"
-    "✨ Join karte hi aapka access activate ho jayega"
-)
-
-
-def bye_text(name):
-    return (
-        f"👋 <b>Goodbye, {esc(name or 'there')}</b>\n\n"
-        "Channel leave hote hi aapka access pause ho gaya hai 🔒\n"
-        "Jab chahein wapas join karke /start dabayein — hum yahin hain 💎"
-    )
-
-
-# ---------------- Force join ----------------
+# ----------------------------- INVITES / MEMBERSHIP -----------------------------
 def force_channel():
     return norm_chat_id(os.getenv("FORCE_CHANNEL", ""))
 
+async def make_invite(context, key, ttl=DAY):
+    channel = channel_of(key)
+    if not channel:
+        raise RuntimeError(f"{PRODUCTS[key]['channel_env']} is missing or invalid")
+    invite = await context.bot.create_chat_invite_link(
+        channel,
+        member_limit=1,
+        expire_date=datetime.now(timezone.utc) + timedelta(seconds=max(ttl, 60)),
+    )
+    return invite.invite_link
 
-_force_link = {"v": norm_url(os.getenv("FORCE_LINK"))}
-JOIN_PROMPTS = {}   # user_id -> [message_id]
-LAST_MENU = {}      # user_id -> welcome message_id
+def link_ttl_text(ttl):
+    return f"{max(1, ttl // HOUR)} hours" if ttl >= HOUR else "a few minutes"
 
+def _in_status(status, is_member=None):
+    return status in ("creator", "administrator", "member") or (
+        status == "restricted" and bool(is_member)
+    )
+
+async def is_member(context, channel, uid):
+    try:
+        member = await context.bot.get_chat_member(channel, uid)
+        return _in_status(member.status, getattr(member, "is_member", None))
+    except Exception as exc:
+        # Fail closed: force-join cannot be verified, so don't silently bypass it.
+        log.warning("Force-join check failed: %s", exc)
+        return False
+
+JOIN_TEXT = (
+    "🔐 <b>Members-Only Access</b>\n\n"
+    "<blockquote>Premium services are available to members of our official channel.</blockquote>\n\n"
+    "📢 Tap below to join, then return to the bot."
+)
+JOIN_PROMPTS = {}
+LAST_MENU = {}
+
+async def get_force_link(context):
+    if _force_link["v"]:
+        return _force_link["v"]
+    channel = force_channel()
+    if not channel:
+        return None
+    try:
+        _force_link["v"] = await context.bot.export_chat_invite_link(channel)
+        return _force_link["v"]
+    except Exception as exc:
+        log.warning("Set FORCE_LINK manually if export fails: %s", exc)
+        return None
 
 async def purge_join_prompts(bot, uid):
     for mid in JOIN_PROMPTS.pop(uid, []):
@@ -347,7 +312,6 @@ async def purge_join_prompts(bot, uid):
             await bot.delete_message(uid, mid)
         except Exception:
             pass
-
 
 async def drop_last_menu(bot, uid):
     mid = LAST_MENU.pop(uid, None)
@@ -357,150 +321,64 @@ async def drop_last_menu(bot, uid):
         except Exception:
             pass
 
-
-async def get_force_link(context):
-    if _force_link["v"]:
-        return _force_link["v"]
-    ch = force_channel()
-    if not ch:
-        return None
-    try:
-        _force_link["v"] = await context.bot.export_chat_invite_link(ch)
-        return _force_link["v"]
-    except Exception as e:
-        log.warning("Force channel ka link nahi bana (FORCE_LINK set karo): %s", e)
-        return None
-
-
-def _in_status(status, is_member=None):
-    return status in ("creator", "administrator", "member") or (status == "restricted" and bool(is_member))
-
-
-async def is_member(context, ch, uid):
-    try:
-        m = await context.bot.get_chat_member(ch, uid)
-        return _in_status(m.status, getattr(m, "is_member", None))
-    except Exception as e:
-        # bot channel mein admin nahi / galat ID: user ko rokna nahi, bas log karo
-        log.warning("Force-join check fail (bot channel mein admin hai?): %s", e)
-        return True
-
-
 async def ensure_joined(update, context):
-    """True = aage badho. False = join prompt bhej diya."""
-    ch = force_channel()
-    u = update.effective_user
-    if not ch or is_admin(u.id):
+    user = update.effective_user
+    channel = force_channel()
+    if not channel or is_admin(user.id):
         return True
-    if await is_member(context, ch, u.id):
-        if u.id in JOIN_PROMPTS:
-            await purge_join_prompts(context.bot, u.id)
+    if await is_member(context, channel, user.id):
+        await purge_join_prompts(context.bot, user.id)
         return True
-    await purge_join_prompts(context.bot, u.id)
+    await purge_join_prompts(context.bot, user.id)
     link = await get_force_link(context)
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Official Channel", url=link)]]) if link else None
-    q = update.callback_query
-    if q:
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("📢 Join Official Channel", url=link)]]
+    ) if link else None
+    query = update.callback_query
+    if query:
         try:
-            await q.answer("🔐 Pehle channel join karein", show_alert=True)
+            await query.answer("Please join the channel first", show_alert=True)
         except Exception:
             pass
-    m = await context.bot.send_message(u.id, JOIN_TEXT, reply_markup=kb, parse_mode=ParseMode.HTML)
-    JOIN_PROMPTS.setdefault(u.id, []).append(m.message_id)
+    msg = await context.bot.send_message(
+        user.id, JOIN_TEXT, reply_markup=keyboard, parse_mode=ParseMode.HTML
+    )
+    JOIN_PROMPTS.setdefault(user.id, []).append(msg.message_id)
     return False
 
-
-async def forcecheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin: force-join sahi set hai ya nahi, check karo."""
-    if not is_admin(update.effective_user.id):
-        return
-    raw = os.getenv("FORCE_CHANNEL")
-    ch = force_channel()
-    if not ch:
-        await update.message.reply_text(
-            f"❌ FORCE_CHANNEL set nahi hai ya galat hai (abhi value: {raw!r}).\n"
-            "Render → Environment mein -100 wali channel ID daalo, phir redeploy karo."
-        )
-        return
-    lines = [f"FORCE_CHANNEL: {ch}"]
-    try:
-        chat = await context.bot.get_chat(ch)
-        lines.append(f"Channel: {chat.title}")
-        me = await context.bot.get_chat_member(ch, context.bot.id)
-        lines.append(f"Bot status: {me.status}")
-        if me.status == "administrator":
-            lines.append("✅ Bot admin hai, force-join chalna chahiye.")
-        else:
-            lines.append("⚠️ Bot ko is channel mein ADMIN banao, warna force-join kaam nahi karega.")
-    except Exception as e:
-        lines.append(f"❌ Error: {e}\n(ID galat hai ya bot channel mein hai hi nahi)")
-    lines.append(f"Join link: {await get_force_link(context) or 'nahi bana (FORCE_LINK daalo)'}")
-    lines.append("\nNote: admin accounts ko join prompt nahi dikhta. Test dusre account se karo.")
-    await update.message.reply_text("\n".join(lines))
-
-
-async def on_force_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Force channel mein join/leave hote hi bot khud message bhejta hai."""
-    cm = update.chat_member
-    ch = force_channel()
-    if not cm or not ch or cm.chat.id != ch:
-        return
-    user = cm.new_chat_member.user
-    if user.is_bot:
-        return
-    was_in = _in_status(cm.old_chat_member.status, getattr(cm.old_chat_member, "is_member", None))
-    now_in = _in_status(cm.new_chat_member.status, getattr(cm.new_chat_member, "is_member", None))
-    # bot sirf unhe message kar sakta hai jinhone bot ko kabhi start kiya ho
-    if await db.users.find_one({"_id": user.id}) is None or await is_banned(user.id):
-        return
-    try:
-        if now_in and not was_in:
-            await purge_join_prompts(context.bot, user.id)
-            await drop_last_menu(context.bot, user.id)
-            m = await context.bot.send_message(
-                user.id, start_text(user.first_name or user.full_name, thanks=True),
-                reply_markup=start_markup(), parse_mode=ParseMode.HTML,
-            )
-            LAST_MENU[user.id] = m.message_id
-        elif was_in and cm.new_chat_member.status == "left":
-            await context.bot.send_message(
-                user.id, bye_text(user.first_name or user.full_name), parse_mode=ParseMode.HTML
-            )
-    except Exception as e:
-        log.info("Force-channel message nahi gaya %s: %s", user.id, e)
-
-
-def home_markup():
-    """'Available Services' screen: products + OTT list + my subscriptions."""
-    rows = [[InlineKeyboardButton(p["name"], callback_data=f"p:{k}")] for k, p in PRODUCTS.items()]
-    rows.append([InlineKeyboardButton("📺 Available OTTs", callback_data="otts")])
-    rows.append([InlineKeyboardButton("📋 My Subscriptions", callback_data="my")])
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="start")])
-    return InlineKeyboardMarkup(rows)
-
-
+# ----------------------------- MENUS -----------------------------
 def start_text(name, thanks=False):
-    """/start par dikhne wala chhota welcome."""
     name = esc(name or "there")
     head = (
         f"🎉 <b>Thank you for joining, {name}!</b>\n✅ Verification complete"
-        if thanks
-        else f"✨ <b>Welcome, {name}!</b>"
+        if thanks else f"✨ <b>Welcome, {name}!</b> ✨"
     )
     return (
-        head
-        + "\n\n"
-        + f"💎 WELCOME, {name}! Kese Ho Aap 😁\n"
-        + "\n\n"
-        + " <b>WHAT WE PROViDES ?<b>\n"
-        + "<b>• A Seamless Entertainment🕺Hub 📡\n"
-        + "• 15 Million+💫 Content Served Over (6 Years)\n"
-        + "• For Those Who Belive in Experience⚡& Quality..\n"
-        + "• All Populor OTTs\n\n"
-        + '🛡️ Developed By: DMT BOTS (https://t.me/DMTBOTS)<b>'
-        + "\n\n👇 Select Option To Continue "
+        f"{head}\n\n"
+        f"💎 <b>WELCOME, {name}! Kese Ho Aap 😁</b>\n\n"
+        "<blockquote><b>WHAT WE PROVIDE</b>\n\n"
+        "• 🕺 A Seamless Entertainment Hub 📡\n"
+        "• 💫 15 Million+ Content Served Over 6 Years\n"
+        "• ⚡ Experience &amp; Quality\n"
+        "• 📺 Multiple OTT Services</blockquote>\n\n"
+        '🛡️ Developed By: <a href="https://t.me/DMTBOTS">DMT BOTS</a>\n\n'
+        "👇 <b>Select an option to continue</b>"
     )
 
+def home_text(name, thanks=False):
+    name = esc(name or "there")
+    heading = (
+        f"🎉 <b>Thank you for joining, {name}!</b>\n✅ Verification complete\n\n"
+        if thanks else f"✨ <b>Welcome, {name}!</b> ✨\n\n"
+    )
+    return (
+        heading + "<blockquote>💎 <b>Premium Access Hub</b>\n"
+        "Choose a plan to request access.</blockquote>\n\n"
+        "⚡ Access after payment verification\n"
+        "🔒 UPI payment\n"
+        "📺 /availableotts — available services\n\n"
+        "👇 <b>Choose a service below</b>"
+    )
 
 def start_markup(support=True):
     rows = [
@@ -511,364 +389,419 @@ def start_markup(support=True):
         rows.append([InlineKeyboardButton("🛟 Admin Support", url=CONTACT_URL)])
     return InlineKeyboardMarkup(rows)
 
+def home_markup():
+    rows = [
+        [InlineKeyboardButton(p["name"], callback_data=f"p:{key}")]
+        for key, p in PRODUCTS.items()
+    ]
+    rows += [
+        [InlineKeyboardButton("📺 Available OTTs", callback_data="otts")],
+        [InlineKeyboardButton("📋 My Subscriptions", callback_data="my")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="start")],
+    ]
+    return InlineKeyboardMarkup(rows)
 
-# Terms & Conditions: abhi blank. Apna text yahan "..." ke andar likho.
-TERMS_TEXT = (
-    "🌐 <b>Terms &amp; Conditions/n"
-"Read Carefully/n"
-"<blockquote>• Here Of Your Purchase Top-Up/ Primium Plan You'll  Easily Access Ur Content "24×7" Till You Have Subscription./n"
-"• There Is a Limited Stock Of Entertainment Package In Which :- HDTC - Fiilms / OTT-Realeses /Web-Seriies / TV-Shhows / TV Seriials are Included./n"
-"• Dear User If You Have Any Other Queries/Problem U-Can Directly Contact/n"
-"@DGHelps_Bot (Our 24×7 Support Chat)/n"
-"Thanks regards/n" 
-"© copyright holder I'd 8763xxxx/n"
-"® Registered Tezstudus.In co<blockquote>"
-﻿</b>\n\n"
-    ""
-)
-
-
+# ----------------------------- USER COMMANDS -----------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    await touch_user(u)
-    if await is_banned(u.id):
-        await update.effective_message.reply_text("🚫 Aap is bot ko use nahi kar sakte.")
+    user = update.effective_user
+    await touch_user(user)
+    if await is_banned(user.id):
+        await update.effective_message.reply_text("🚫 You cannot use this bot.")
         return
     if not await ensure_joined(update, context):
         return
     context.user_data.pop("buying", None)
-    await drop_last_menu(context.bot, u.id)
-    text = start_text(u.first_name or u.full_name)
+    await drop_last_menu(context.bot, user.id)
     try:
-        m = await update.effective_message.reply_text(
-            text, reply_markup=start_markup(), parse_mode=ParseMode.HTML
+        msg = await update.effective_message.reply_text(
+            start_text(user.first_name or user.full_name),
+            reply_markup=start_markup(), parse_mode=ParseMode.HTML,
         )
-    except Exception as e:
-        log.error("Start screen (support button ke saath) fail: %s | CONTACT_URL=%r", e, CONTACT_URL)
-        m = await update.effective_message.reply_text(
-            text, reply_markup=start_markup(support=False), parse_mode=ParseMode.HTML
+    except Exception as exc:
+        log.warning("Start screen failed with support button: %s", exc)
+        msg = await update.effective_message.reply_text(
+            start_text(user.first_name or user.full_name),
+            reply_markup=start_markup(support=False), parse_mode=ParseMode.HTML,
         )
-    LAST_MENU[u.id] = m.message_id
+    LAST_MENU[user.id] = msg.message_id
     try:
         await update.effective_message.delete()
     except Exception:
         pass
 
-
 async def availableotts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    await touch_user(u)
-    if await is_banned(u.id):
+    user = update.effective_user
+    await touch_user(user)
+    if await is_banned(user.id) or not await ensure_joined(update, context):
         return
-    if not await ensure_joined(update, context):
-        return
-    await update.message.reply_text(AVAILABLE_OTTS_TEXT, parse_mode=ParseMode.HTML)
+    await update.effective_message.reply_text(
+        AVAILABLE_OTTS_TEXT, parse_mode=ParseMode.HTML
+    )
 
+async def my_subs_text(user_id):
+    now = int(time.time())
+    rows = await db.subs.find({
+        "user_id": user_id, "active": True, "expiry_ts": {"$gt": now}
+    }).to_list(None)
+    if not rows:
+        return "You have no active subscriptions."
+    lines = ["<b>📋 Your active plans:</b>\n"]
+    for row in rows:
+        lines.append(
+            f"{esc(pname(row['product']))}\n"
+            f"Expiry: {fmt(row['expiry_ts'])} ({fmt_left(row['expiry_ts'] - now)} left)"
+        )
+    return "\n\n".join(lines)
 
-async def show_product(q, key):
-    p = PRODUCTS[key]
+async def show_product(query, key):
+    product = PRODUCTS[key]
     text = (
-        f"🎗 <b>VIP ACCESS PLANS</b> 🎗\n<b>{esc(p['name'])}</b>\n\n"
-        f"📜 <b>Terms:</b>\n{esc(p['terms'])}\n\n👇 Apna plan select karein"
+        f"🎗 <b>VIP ACCESS PLANS</b> 🎗\n<b>{esc(product['name'])}</b>\n\n"
+        f"📜 <b>Terms:</b>\n{esc(product['terms'])}\n\n"
+        "👇 Choose a plan"
     )
     rows = [
-        [InlineKeyboardButton(f"{pl['label']} — ₹{pl['price']}", callback_data=f"plan:{key}:{pl['id']}")]
-        for pl in PLANS
+        [InlineKeyboardButton(
+            f"{plan['label']} — ₹{plan['price']}",
+            callback_data=f"plan:{key}:{plan['id']}"
+        )]
+        for plan in PLANS
     ]
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="home")])
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+    await query.edit_message_text(
+        text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML
+    )
 
-
-async def show_payment(q, context, key, pid):
-    pl = get_plan(pid)
-    if not pl:
+async def show_payment(query, context, key, pid):
+    plan = get_plan(pid)
+    if not plan:
+        await query.answer("Invalid plan", show_alert=True)
         return
     context.user_data["buying"] = {"key": key, "plan": pid}
     has_qr = bool(await get_setting("qr_file_id"))
     text = (
         f"<b>{esc(PRODUCTS[key]['name'])}</b>\n"
-        f"📦 Plan: <b>{pl['label']} — ₹{pl['price']}</b>\n\n"
-        "<b>Payment karein</b>\n\n"
-        f"UPI ID (tap karke copy karein):\n<code>{esc(UPI_ID)}</code>\n\n"
+        f"📦 Plan: <b>{plan['label']} — ₹{plan['price']}</b>\n\n"
+        "<b>Make payment</b>\n\n"
+        f"UPI ID (tap to copy):\n<code>{esc(UPI_ID)}</code>\n\n"
     )
     rows = []
     if has_qr:
-        text += "Ya QR scan karein 👇\n\n"
-        rows.append([InlineKeyboardButton("QR-CODE", callback_data="qr")])
-    text += "Payment ke baad yahin <b>screenshot (photo)</b> bhejein."
+        text += "Or scan the QR code below.\n\n"
+        rows.append([InlineKeyboardButton("📷 Show QR Code", callback_data="qr")])
+    text += "After payment, send the screenshot here as a photo."
     rows.append([InlineKeyboardButton("⬅️ Back / Cancel", callback_data=f"p:{key}")])
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
-
-
-async def my_subs_text(user_id):
-    now = int(time.time())
-    rows = await db.subs.find(
-        {"user_id": user_id, "active": True, "expiry_ts": {"$gt": now}}
-    ).to_list(None)
-    if not rows:
-        return "Aapka koi active subscription nahi hai."
-    lines = ["<b>📋 Aapke active plans:</b>\n"]
-    for r in rows:
-        lines.append(f"{esc(pname(r['product']))}\nExpiry: {fmt(r['expiry_ts'])} ({fmt_left(r['expiry_ts'] - now)} baaki)")
-    return "\n".join(lines)
-
+    await query.edit_message_text(
+        text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML
+    )
 
 async def user_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if await is_banned(q.from_user.id):
-        await q.answer("🚫 Aap banned hain", show_alert=True)
+    query = update.callback_query
+    uid = query.from_user.id
+    if await is_banned(uid):
+        await query.answer("🚫 You are banned", show_alert=True)
         return
     if not await ensure_joined(update, context):
         return
-    data = q.data
-
+    data = query.data
     if data == "qr":
-        fid = await get_setting("qr_file_id")
-        if not fid:
-            await q.answer("QR abhi available nahi hai. UPI se payment karein.", show_alert=True)
+        file_id = await get_setting("qr_file_id")
+        if not file_id:
+            await query.answer("QR unavailable; use UPI ID.", show_alert=True)
             return
-        await q.answer()
-        cap = "📷 QR scan karke payment karein."
+        await query.answer()
+        caption = "📷 Scan the QR to pay."
         buying = context.user_data.get("buying")
         if buying:
-            pl = get_plan(buying["plan"])
-            if pl:
-                cap += f"\n{pl['label']} — ₹{pl['price']}"
-        cap += "\n\nPayment ke baad yahin screenshot (photo) bhejein."
-        await context.bot.send_photo(q.from_user.id, fid, caption=cap)
+            plan = get_plan(buying["plan"])
+            if plan:
+                caption += f"\n{plan['label']} — ₹{plan['price']}"
+        caption += "\nSend payment screenshot here after paying."
+        await context.bot.send_photo(uid, file_id, caption=caption)
         return
-
-    await q.answer()
-    await touch_user(q.from_user)
-
+    await query.answer()
+    await touch_user(query.from_user)
     if data in ("home", "src"):
         context.user_data.pop("buying", None)
-        await q.edit_message_text(
-            home_text(q.from_user.first_name or q.from_user.full_name),
-            reply_markup=home_markup(), parse_mode=ParseMode.HTML,
+        await query.edit_message_text(
+            home_text(query.from_user.first_name or query.from_user.full_name),
+            reply_markup=home_markup(), parse_mode=ParseMode.HTML
         )
     elif data == "start":
         context.user_data.pop("buying", None)
-        await q.edit_message_text(
-            start_text(q.from_user.first_name or q.from_user.full_name),
-            reply_markup=start_markup(), parse_mode=ParseMode.HTML,
+        await query.edit_message_text(
+            start_text(query.from_user.first_name or query.from_user.full_name),
+            reply_markup=start_markup(), parse_mode=ParseMode.HTML
         )
     elif data == "terms":
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="start")]])
-        await q.edit_message_text(TERMS_TEXT, reply_markup=kb, parse_mode=ParseMode.HTML)
+        await query.edit_message_text(
+            TERMS_TEXT,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Back", callback_data="start")
+            ]]),
+            parse_mode=ParseMode.HTML,
+        )
     elif data == "otts":
-        await context.bot.send_message(q.from_user.id, AVAILABLE_OTTS_TEXT, parse_mode=ParseMode.HTML)
+        await context.bot.send_message(uid, AVAILABLE_OTTS_TEXT, parse_mode=ParseMode.HTML)
     elif data == "my":
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="home")]])
-        await q.edit_message_text(await my_subs_text(q.from_user.id), reply_markup=kb, parse_mode=ParseMode.HTML)
+        await query.edit_message_text(
+            await my_subs_text(uid),
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Back", callback_data="home")
+            ]]),
+            parse_mode=ParseMode.HTML,
+        )
     elif data.startswith("p:"):
         key = data[2:]
         if key in PRODUCTS:
             context.user_data.pop("buying", None)
-            await show_product(q, key)
+            await show_product(query, key)
     elif data.startswith("plan:"):
-        _, key, pid = data.split(":")
-        if key in PRODUCTS:
-            await show_payment(q, context, key, pid)
-
+        parts = data.split(":")
+        if len(parts) == 3 and parts[1] in PRODUCTS:
+            await show_payment(query, context, parts[1], parts[2])
 
 async def mysubs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await touch_user(update.effective_user)
-    if await is_banned(update.effective_user.id) or not await ensure_joined(update, context):
+    user = update.effective_user
+    await touch_user(user)
+    if await is_banned(user.id) or not await ensure_joined(update, context):
         return
-    await update.message.reply_text(await my_subs_text(update.effective_user.id), parse_mode=ParseMode.HTML)
-
+    await update.effective_message.reply_text(
+        await my_subs_text(user.id), parse_mode=ParseMode.HTML
+    )
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    if await is_banned(u.id):
+    user = update.effective_user
+    if await is_banned(user.id):
         return
-    await touch_user(u)
+    await touch_user(user)
     if not await ensure_joined(update, context):
         return
     buying = context.user_data.get("buying")
-    pl = get_plan(buying["plan"]) if buying else None
-    if not buying or not pl:
-        await update.message.reply_text("Pehle /start karke plan choose karein.")
+    plan = get_plan(buying["plan"]) if buying else None
+    if not buying or not plan or buying.get("key") not in PRODUCTS:
+        await update.effective_message.reply_text("Please use /start and choose a plan first.")
         return
-
     key = buying["key"]
-    file_id = update.message.photo[-1].file_id
-    req_id = await next_req_id()
+    request_id = await next_req_id()
+    file_id = update.effective_message.photo[-1].file_id
     await db.requests.insert_one({
-        "_id": req_id, "user_id": u.id, "username": u.username, "full_name": u.full_name,
-        "product": key, "status": "pending", "file_id": file_id, "created_at": int(time.time()),
-        "plan_secs": pl["secs"], "plan_label": pl["label"], "plan_price": pl["price"],
+        "_id": request_id, "user_id": user.id, "username": user.username,
+        "full_name": user.full_name, "product": key, "status": "pending",
+        "file_id": file_id, "created_at": int(time.time()),
+        "plan_secs": plan["secs"], "plan_label": plan["label"],
+        "plan_price": plan["price"],
     })
     context.user_data.pop("buying", None)
-    await update.message.reply_text("✅ Screenshot mil gaya! Admin verify karke jaldi approve karenge.")
-
-    caption = (
-        f"🧾 <b>New Payment Request #{req_id}</b>\n\n"
-        f"👤 {esc(u.full_name)} (@{esc(u.username) or '-'})\n"
-        f"🆔 <code>{u.id}</code>\n"
-        f"📦 {esc(PRODUCTS[key]['name'])}\n"
-        f"⏳ Plan: {pl['label']} — ₹{pl['price']}"
+    await update.effective_message.reply_text(
+        "✅ Screenshot received. Admin will verify the payment."
     )
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"✅ Approve ({fmt_dur(pl['secs'])})", callback_data=f"ap:{req_id}")],
-        [InlineKeyboardButton("⏱ Change duration", callback_data=f"chg:{req_id}"),
-         InlineKeyboardButton("❌ Reject", callback_data=f"rj:{req_id}")],
+    caption = (
+        f"🧾 <b>Payment Request #{request_id}</b>\n\n"
+        f"👤 {esc(user.full_name)} (@{esc(user.username) or '-'})\n"
+        f"🆔 <code>{user.id}</code>\n"
+        f"📦 {esc(PRODUCTS[key]['name'])}\n"
+        f"⏳ Plan: {esc(plan['label'])} — ₹{plan['price']}"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            f"✅ Approve ({fmt_dur(plan['secs'])})", callback_data=f"ap:{request_id}"
+        )],
+        [
+            InlineKeyboardButton("⏱ Change duration", callback_data=f"chg:{request_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"rj:{request_id}"),
+        ],
     ])
-    for admin in ADMIN_IDS:
+    for admin_id in ADMIN_IDS:
         try:
-            await context.bot.send_photo(admin, file_id, caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML)
-        except Exception as e:
-            log.warning("Admin %s ko send nahi hua: %s", admin, e)
+            await context.bot.send_photo(
+                admin_id, file_id, caption=caption, reply_markup=keyboard,
+                parse_mode=ParseMode.HTML, auto_delete=False,
+            )
+        except Exception:
+            log.exception("Could not notify admin %s", admin_id)
 
-
-# ================================================================ ADMIN APPROVAL
-def duration_keyboard(req_id):
+# ----------------------------- APPROVAL -----------------------------
+def duration_keyboard(request_id):
     rows, row = [], []
-    for secs, label in DURATION_CHOICES:
-        row.append(InlineKeyboardButton(label, callback_data=f"dur:{req_id}:{secs}"))
+    for seconds, label in DURATION_CHOICES:
+        row.append(InlineKeyboardButton(label, callback_data=f"dur:{request_id}:{seconds}"))
         if len(row) == 4:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("✏️ Custom days", callback_data=f"cd:{req_id}")])
-    rows.append([InlineKeyboardButton("❌ Reject", callback_data=f"rj:{req_id}")])
+    rows.append([InlineKeyboardButton("✏️ Custom days", callback_data=f"cd:{request_id}")])
+    rows.append([InlineKeyboardButton("❌ Reject", callback_data=f"rj:{request_id}")])
     return InlineKeyboardMarkup(rows)
 
-
-async def finalize(context, req_id, secs):
-    """Request approve karo, subscription banao/badhao, user ko link bhejo. Summary text return."""
+async def finalize(context, request_id, seconds):
+    """Atomically claim request, create/extend subscription, then notify user."""
     now = int(time.time())
-    # atomic: sirf ek hi baar approve ho (double click safe)
-    res = await db.requests.update_one(
-        {"_id": req_id, "status": "pending"}, {"$set": {"status": "approved"}}
+    req = await db.requests.find_one_and_update(
+        {"_id": request_id, "status": "pending"},
+        {"$set": {"status": "processing", "processing_at": now}},
+        return_document=ReturnDocument.AFTER,
     )
-    if res.modified_count == 0:
-        return "Request pehle hi handle ho chuki hai."
-
-    req = await db.requests.find_one({"_id": req_id})
-    key, uid = req["product"], req["user_id"]
-    sub_id = f"{uid}:{key}"
-    sub = await db.subs.find_one({"_id": sub_id})
-    if sub and sub.get("active") and sub["expiry_ts"] > now:
-        start, base = sub["start_ts"], sub["expiry_ts"]  # renew: purani expiry se aage badhao
-    else:
-        start, base = now, now
-    expiry = base + secs
-    reminded = expiry - now <= REMIND_DAYS * DAY
-
-    await db.subs.update_one(
-        {"_id": sub_id},
-        {"$set": {"user_id": uid, "product": key, "start_ts": start,
-                  "expiry_ts": expiry, "active": True, "reminded": reminded}},
-        upsert=True,
-    )
-
-    text = (
-        f"✅ <b>Payment approved!</b>\n\n📦 {esc(pname(key))}\n"
-        f"🗓 Joining: {fmt(start)}\n⏳ Expiry: <b>{fmt(expiry)}</b>\n\n"
-    )
-    note = ""
+    if not req:
+        return "⚠️ Request already handled or is being processed."
     try:
-        ttl = min(DAY, expiry - now)
-        link = await make_invite(context, key, ttl)
-        text += f"🔗 Join link (sirf 1 banda, {link_ttl_text(ttl)} valid):\n{link}"
-    except Exception as e:
-        log.error("Invite link fail: %s", e)
-        note = f"\n⚠️ Invite link nahi bana: {e}\nManually bhejo: /resend {uid} {key}"
-        text += "Admin aapko jaldi channel link bhej denge."
-    try:
-        await context.bot.send_message(uid, text, parse_mode=ParseMode.HTML, auto_delete=False)
-    except Exception as e:
-        note += f"\n⚠️ User ko message nahi gaya: {e}"
-
-    return f"✅ <b>Approved</b> — {fmt_dur(secs)}, expiry {fmt(expiry)}{esc(note)}"
-
+        key, uid = req["product"], req["user_id"]
+        if key not in PRODUCTS or seconds <= 0:
+            raise ValueError("Invalid product or duration")
+        sub_id = f"{uid}:{key}"
+        sub = await db.subs.find_one({"_id": sub_id})
+        if sub and sub.get("active") and sub.get("expiry_ts", 0) > now:
+            start_ts, base = sub.get("start_ts", now), sub["expiry_ts"]
+        else:
+            start_ts, base = now, now
+        expiry = base + seconds
+        reminded = expiry - now <= REMIND_DAYS * DAY
+        await db.subs.update_one(
+            {"_id": sub_id},
+            {"$set": {
+                "user_id": uid, "product": key, "start_ts": start_ts,
+                "expiry_ts": expiry, "active": True, "reminded": reminded,
+            }},
+            upsert=True,
+        )
+        try:
+            ttl = min(DAY, expiry - now)
+            link = await make_invite(context, key, ttl)
+            message = (
+                f"✅ <b>Payment approved!</b>\n\n📦 {esc(pname(key))}\n"
+                f"🗓 Starts: {fmt(start_ts)}\n⏳ Expiry: <b>{fmt(expiry)}</b>\n\n"
+                f"🔗 One-use invite link (valid for {esc(link_ttl_text(ttl))}):\n{esc(link)}"
+            )
+        except Exception as exc:
+            log.exception("Invite link creation failed")
+            message = (
+                f"✅ <b>Payment approved!</b>\n\n📦 {esc(pname(key))}\n"
+                f"⏳ Expiry: <b>{fmt(expiry)}</b>\n\n"
+                "⚠️ Your subscription is saved, but the invite link could not be created. "
+                "Please contact admin."
+            )
+        try:
+            await context.bot.send_message(uid, message, parse_mode=ParseMode.HTML, auto_delete=False)
+        except Exception:
+            log.exception("Could not notify approved user %s", uid)
+        await db.requests.update_one(
+            {"_id": request_id, "status": "processing"},
+            {"$set": {"status": "approved", "handled_at": int(time.time()),
+                      "approved_secs": seconds}},
+        )
+        return f"✅ <b>Approved</b> — {esc(fmt_dur(seconds))}, expiry {fmt(expiry)}"
+    except Exception:
+        log.exception("Approval failed for request #%s", request_id)
+        await db.requests.update_one(
+            {"_id": request_id, "status": "processing"},
+            {"$set": {"status": "pending", "last_error_at": int(time.time())}},
+        )
+        return "❌ Approval failed. Request returned to pending; check Render logs."
 
 async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not is_admin(q.from_user.id):
-        await q.answer("Sirf admin ke liye", show_alert=True)
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("Admins only", show_alert=True)
         return
-    await q.answer()
-    parts = q.data.split(":")
-    action, req_id = parts[0], int(parts[1])
-    req = await db.requests.find_one({"_id": req_id})
-
-    if not req or req["status"] != "pending":
-        try:
-            await q.edit_message_reply_markup(None)
-        except Exception:
-            pass
-        await q.message.reply_text(f"Request #{req_id} pehle hi handle ho chuki hai.")
+    await query.answer()
+    parts = query.data.split(":")
+    try:
+        action, request_id = parts[0], int(parts[1])
+    except (ValueError, IndexError):
         return
-
-    if action == "ap":
-        summary = await finalize(context, req_id, int(req["plan_secs"]))
-        await q.edit_message_caption((q.message.caption_html or "") + "\n\n" + summary, parse_mode=ParseMode.HTML)
-    elif action == "chg":
-        await q.edit_message_reply_markup(duration_keyboard(req_id))
-    elif action == "cd":
-        context.user_data["await_days"] = req_id
-        await q.message.reply_text(f"Request #{req_id}: din ki sankhya number mein bhejein (e.g. 45)")
-    elif action == "dur":
-        summary = await finalize(context, req_id, int(parts[2]))
-        await q.edit_message_caption((q.message.caption_html or "") + "\n\n" + summary, parse_mode=ParseMode.HTML)
-    elif action == "rj":
-        await db.requests.update_one({"_id": req_id, "status": "pending"}, {"$set": {"status": "rejected"}})
-        await q.edit_message_caption((q.message.caption_html or "") + "\n\n❌ <b>Rejected</b>", parse_mode=ParseMode.HTML)
+    req = await db.requests.find_one({"_id": request_id})
+    if not req:
+        await query.message.reply_text("Request not found.")
+        return
+    if action == "chg":
+        if req["status"] == "pending":
+            await query.edit_message_reply_markup(duration_keyboard(request_id))
+        return
+    if action == "cd":
+        if req["status"] != "pending":
+            await query.message.reply_text("Request already handled.")
+            return
+        context.user_data["await_days"] = request_id
+        await query.message.reply_text(
+            f"Request #{request_id}: send duration in days (1-3650)."
+        )
+        return
+    if action == "rj":
+        result = await db.requests.update_one(
+            {"_id": request_id, "status": "pending"},
+            {"$set": {"status": "rejected", "handled_at": int(time.time())}},
+        )
+        if result.modified_count:
+            try:
+                await context.bot.send_message(
+                    req["user_id"],
+                    "❌ Payment could not be verified. Please contact support or try again.",
+                    auto_delete=False,
+                )
+            except Exception:
+                pass
+            try:
+                await query.edit_message_caption(
+                    (query.message.caption_html or "") + "\n\n❌ <b>Rejected</b>",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+        else:
+            await query.message.reply_text("Request already handled.")
+        return
+    if action in ("ap", "dur"):
+        seconds = int(req["plan_secs"]) if action == "ap" else int(parts[2])
+        summary = await finalize(context, request_id, seconds)
         try:
-            await context.bot.send_message(
-                req["user_id"],
-                "❌ Aapka payment verify nahi ho paya. Sahi screenshot ke saath dobara try karein ya admin se contact karein.",
-                auto_delete=False,
+            await query.edit_message_caption(
+                (query.message.caption_html or "") + "\n\n" + summary,
+                parse_mode=ParseMode.HTML,
             )
         except Exception:
-            pass
-
+            await query.message.reply_text(summary, parse_mode=ParseMode.HTML)
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    # admin ka custom-days input
-    if is_admin(uid) and context.user_data.get("await_days"):
-        t = update.message.text.strip()
-        if not t.isdigit() or not (0 < int(t) <= 3650):
-            await update.message.reply_text("Sahi number bhejein (1-3650).")
+    user = update.effective_user
+    if is_admin(user.id) and context.user_data.get("await_days"):
+        value = (update.effective_message.text or "").strip()
+        if not value.isdigit() or not 1 <= int(value) <= 3650:
+            await update.effective_message.reply_text("Send a valid number from 1 to 3650.")
             return
-        req_id = context.user_data.pop("await_days")
-        summary = await finalize(context, req_id, int(t) * DAY)
-        await update.message.reply_text(summary, parse_mode=ParseMode.HTML)
+        request_id = context.user_data.pop("await_days")
+        summary = await finalize(context, request_id, int(value) * DAY)
+        await update.effective_message.reply_text(summary, parse_mode=ParseMode.HTML)
         return
-    if not await is_banned(uid):
-        await touch_user(update.effective_user)
-        if not await ensure_joined(update, context):
-            return
-        await update.message.reply_text("/start dabake menu kholein.")
+    if not await is_banned(user.id):
+        await touch_user(user)
+        if await ensure_joined(update, context):
+            await update.effective_message.reply_text("Use /start to open the menu.")
 
-
-# ================================================================ ADMIN COMMANDS
+# ----------------------------- ADMIN COMMANDS -----------------------------
 async def subs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     now = int(time.time())
     rows = await db.subs.find({"active": True, "expiry_ts": {"$gt": now}}).to_list(None)
-    rows.sort(key=lambda r: r["expiry_ts"])
+    rows.sort(key=lambda item: item["expiry_ts"])
     if not rows:
-        await update.message.reply_text("Koi active subscriber nahi.")
+        await update.effective_message.reply_text("No active subscribers.")
         return
     users = {u["_id"]: u for u in await db.users.find({}).to_list(None)}
     lines = [f"<b>Active subscribers ({len(rows)})</b>\n"]
-    for r in rows:
-        u = users.get(r["user_id"], {})
+    for row in rows:
+        user = users.get(row["user_id"], {})
         lines.append(
-            f"• {esc(u.get('full_name'))} (@{esc(u.get('username')) or '-'}) <code>{r['user_id']}</code>\n"
-            f"  {esc(pname(r['product']))} → {fmt(r['expiry_ts'])}"
+            f"• {esc(user.get('full_name'))} (@{esc(user.get('username')) or '-'}) "
+            f"<code>{row['user_id']}</code>\n"
+            f"  {esc(pname(row['product']))} → {fmt(row['expiry_ts'])}"
         )
-    text = "\n".join(lines)
-    for i in range(0, len(text), 3800):
-        await update.message.reply_text(text[i:i + 3800], parse_mode=ParseMode.HTML)
-
+    output = "\n".join(lines)
+    for start in range(0, len(output), 3500):
+        await update.effective_message.reply_text(
+            output[start:start + 3500], parse_mode=ParseMode.HTML
+        )
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -878,223 +811,313 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending = await db.requests.count_documents({"status": "pending"})
     banned = await db.banned.count_documents({})
     approved = await db.requests.find({"status": "approved"}).to_list(None)
-    paid_sum = sum(r.get("plan_price") or 0 for r in approved)
+    paid_sum = sum(row.get("plan_price", 0) or 0 for row in approved)
     active = await db.subs.find({"active": True, "expiry_ts": {"$gt": now}}).to_list(None)
-    per = {}
-    for s in active:
-        per[s["product"]] = per.get(s["product"], 0) + 1
+    per_product = {}
+    for sub in active:
+        per_product[sub["product"]] = per_product.get(sub["product"], 0) + 1
     lines = [
-        f"👥 Total users: {users}", f"🚫 Banned: {banned}", f"⏳ Pending requests: {pending}",
-        f"💰 Approved payments: {len(approved)} (₹{paid_sum})", "", "Active subs:",
+        f"👥 Total users: {users}", f"🚫 Banned: {banned}",
+        f"⏳ Pending requests: {pending}",
+        f"💰 Approved payments: {len(approved)} (₹{paid_sum})", "", "Active subscriptions:",
     ]
-    lines += [f"• {pname(k)}: {n}" for k, n in per.items()] or ["• none"]
-    await update.message.reply_text("\n".join(lines))
+    lines += [f"• {pname(key)}: {count}" for key, count in per_product.items()] or ["• none"]
+    await update.effective_message.reply_text("\n".join(lines))
 
+async def kick(context, uid, key):
+    channel = channel_of(key)
+    if not channel:
+        raise RuntimeError(f"Channel for {key} is not configured")
+    await context.bot.ban_chat_member(channel, uid)
+    await context.bot.unban_chat_member(channel, uid, only_if_banned=True)
 
 async def revoke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/revoke <user_id> <product>"""
     if not is_admin(update.effective_user.id):
         return
-    a = context.args
-    if len(a) != 2 or a[1] not in PRODUCTS or not a[0].isdigit():
-        await update.message.reply_text("Use: /revoke <user_id> <product>\nProducts: " + ", ".join(PRODUCTS))
+    args = context.args
+    if len(args) != 2 or args[1] not in PRODUCTS or not args[0].isdigit():
+        await update.effective_message.reply_text(
+            "Use: /revoke <user_id> <product>\nProducts: " + ", ".join(PRODUCTS)
+        )
         return
-    uid, key = int(a[0]), a[1]
-    await kick(context, uid, key)
-    await db.subs.update_one({"_id": f"{uid}:{key}"}, {"$set": {"active": False}})
-    await update.message.reply_text("Done ✅")
-
+    uid, key = int(args[0]), args[1]
+    try:
+        await kick(context, uid, key)
+        await db.subs.update_one({"_id": f"{uid}:{key}"}, {"$set": {"active": False}})
+        await update.effective_message.reply_text("Revoked successfully ✅")
+    except Exception as exc:
+        log.exception("Revoke failed")
+        await update.effective_message.reply_text(f"❌ Channel removal failed: {esc(exc)}")
 
 async def resend_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/resend <user_id> <product> -> active subscriber ko naya join link"""
     if not is_admin(update.effective_user.id):
         return
-    a = context.args
-    if len(a) != 2 or a[1] not in PRODUCTS or not a[0].isdigit():
-        await update.message.reply_text("Use: /resend <user_id> <product>\nProducts: " + ", ".join(PRODUCTS))
+    args = context.args
+    if len(args) != 2 or args[1] not in PRODUCTS or not args[0].isdigit():
+        await update.effective_message.reply_text(
+            "Use: /resend <user_id> <product>"
+        )
         return
-    uid, key = int(a[0]), a[1]
+    uid, key = int(args[0]), args[1]
     now = int(time.time())
-    sub = await db.subs.find_one({"_id": f"{uid}:{key}", "active": True, "expiry_ts": {"$gt": now}})
+    sub = await db.subs.find_one({
+        "_id": f"{uid}:{key}", "active": True, "expiry_ts": {"$gt": now}
+    })
     if not sub:
-        await update.message.reply_text("Is user ka is plan mein active subscription nahi hai.")
+        await update.effective_message.reply_text("User has no active subscription for this product.")
         return
     try:
         ttl = min(DAY, sub["expiry_ts"] - now)
         link = await make_invite(context, key, ttl)
         await context.bot.send_message(
-            uid, f"🔗 {pname(key)} join link (sirf 1 banda, {link_ttl_text(ttl)} valid):\n{link}",
-            auto_delete=False,
+            uid, f"🔗 {esc(pname(key))} invite link (one use, {esc(link_ttl_text(ttl))}):\n{esc(link)}",
+            parse_mode=ParseMode.HTML, auto_delete=False,
         )
-        await update.message.reply_text("Link bhej diya ✅")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Fail: {e}")
-
+        await update.effective_message.reply_text("Link sent ✅")
+    except Exception as exc:
+        log.exception("Resend failed")
+        await update.effective_message.reply_text(f"❌ Failed: {esc(exc)}")
 
 async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/ban <user_id> -> bot use band + subscriptions band + sab channels se ban"""
     if not is_admin(update.effective_user.id):
         return
     if len(context.args) != 1 or not context.args[0].isdigit():
-        await update.message.reply_text("Use: /ban <user_id>")
+        await update.effective_message.reply_text("Use: /ban <user_id>")
         return
     uid = int(context.args[0])
     if is_admin(uid):
-        await update.message.reply_text("Admin ko ban nahi kar sakte.")
+        await update.effective_message.reply_text("Cannot ban an admin.")
         return
-    await db.banned.update_one({"_id": uid}, {"$setOnInsert": {"at": int(time.time())}}, upsert=True)
+    await db.banned.update_one(
+        {"_id": uid}, {"$setOnInsert": {"at": int(time.time())}}, upsert=True
+    )
     await db.subs.update_many({"user_id": uid}, {"$set": {"active": False}})
-    lines = [f"🚫 {uid} banned."]
-    for ch in all_channels():
+    lines = [f"🚫 {uid} banned from bot."]
+    for channel in all_channels():
         try:
-            await context.bot.ban_chat_member(ch, uid)
-            lines.append(f"✅ channel {ch}: banned")
-        except Exception as e:
-            lines.append(f"❌ channel {ch}: {e}")
-    await update.message.reply_text("\n".join(lines))
-
+            await context.bot.ban_chat_member(channel, uid)
+            lines.append(f"✅ Channel {channel}: banned")
+        except Exception as exc:
+            lines.append(f"❌ Channel {channel}: {esc(exc)}")
+    await update.effective_message.reply_text("\n".join(lines))
 
 async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if len(context.args) != 1 or not context.args[0].isdigit():
-        await update.message.reply_text("Use: /unban <user_id>")
+        await update.effective_message.reply_text("Use: /unban <user_id>")
         return
     uid = int(context.args[0])
     await db.banned.delete_one({"_id": uid})
-    lines = [f"✅ {uid} unbanned."]
-    for ch in all_channels():
+    lines = [f"✅ {uid} unbanned from bot."]
+    for channel in all_channels():
         try:
-            await context.bot.unban_chat_member(ch, uid, only_if_banned=True)
-            lines.append(f"✅ channel {ch}: unbanned")
-        except Exception as e:
-            lines.append(f"❌ channel {ch}: {e}")
-    await update.message.reply_text("\n".join(lines))
-
+            await context.bot.unban_chat_member(channel, uid, only_if_banned=True)
+            lines.append(f"✅ Channel {channel}: unbanned")
+        except Exception as exc:
+            lines.append(f"❌ Channel {channel}: {esc(exc)}")
+    await update.effective_message.reply_text("\n".join(lines))
 
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/broadcast <text>  ya kisi message ko reply karke /broadcast"""
     if not is_admin(update.effective_user.id):
         return
-    msg = update.message
-    reply = msg.reply_to_message
-    parts = msg.text.split(maxsplit=1)
-    text = parts[1] if len(parts) > 1 else ""
-    if not reply and not text:
-        await msg.reply_text("Use:\n/broadcast <message>\nYa kisi message ko reply karke /broadcast likho.")
+    message = update.effective_message
+    reply = message.reply_to_message
+    parts = (message.text or "").split(maxsplit=1)
+    body = parts[1] if len(parts) > 1 else ""
+    if not reply and not body:
+        await message.reply_text(
+            "Use /broadcast <message>, or reply to a message with /broadcast."
+        )
         return
-    banned = {b["_id"] for b in await db.banned.find({}).to_list(None)}
-    ids = [u["_id"] for u in await db.users.find({}).to_list(None) if u["_id"] not in banned]
-    await msg.reply_text(f"📢 Broadcast shuru: {len(ids)} users...")
+    banned_ids = {doc["_id"] for doc in await db.banned.find({}).to_list(None)}
+    user_ids = [
+        doc["_id"] for doc in await db.users.find({}).to_list(None)
+        if doc["_id"] not in banned_ids
+    ]
+    await message.reply_text(f"📢 Broadcast starting: {len(user_ids)} users...")
     admin_id = update.effective_user.id
 
-    async def run():
+    async def run_broadcast():
         sent = failed = 0
-        for uid in ids:
-            for _ in range(2):
+        for uid in user_ids:
+            try:
+                if reply:
+                    await context.bot.copy_message(uid, reply.chat_id, reply.message_id)
+                else:
+                    await context.bot.send_message(uid, body, auto_delete=False)
+                sent += 1
+            except RetryAfter as exc:
+                await asyncio.sleep(exc.retry_after + 1)
                 try:
                     if reply:
                         await context.bot.copy_message(uid, reply.chat_id, reply.message_id)
                     else:
-                        await context.bot.send_message(uid, text, auto_delete=False)
+                        await context.bot.send_message(uid, body, auto_delete=False)
                     sent += 1
-                    break
-                except RetryAfter as e:
-                    await asyncio.sleep(e.retry_after + 1)
                 except Exception:
                     failed += 1
-                    break
+            except Exception:
+                failed += 1
             await asyncio.sleep(0.05)
-        await context.bot.send_message(admin_id, f"📢 Broadcast done ✅\nSent: {sent}\nFailed: {failed}")
-
-    context.application.create_task(run())
-
+        await context.bot.send_message(
+            admin_id, f"📢 Broadcast finished\nSent: {sent}\nFailed: {failed}",
+            auto_delete=False,
+        )
+    context.application.create_task(run_broadcast())
 
 async def setqr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """QR ki photo par reply karke /setqr"""
     if not is_admin(update.effective_user.id):
         return
-    r = update.message.reply_to_message
-    if not r or not r.photo:
-        await update.message.reply_text("QR ki photo bhejo, phir us photo par reply karke /setqr likho.")
+    reply = update.effective_message.reply_to_message
+    if not reply or not reply.photo:
+        await update.effective_message.reply_text(
+            "Reply to a QR photo with /setqr."
+        )
         return
-    await set_setting("qr_file_id", r.photo[-1].file_id)
-    await update.message.reply_text("✅ QR set ho gaya.")
-
+    await set_setting("qr_file_id", reply.photo[-1].file_id)
+    await update.effective_message.reply_text("✅ QR saved.")
 
 async def removeqr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     await db.settings.delete_one({"_id": "qr_file_id"})
-    await update.message.reply_text("QR hata diya.")
-
+    await update.effective_message.reply_text("QR removed.")
 
 async def forwarded_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin kisi channel ka message bot ko forward kare -> channel ki ID mil jayegi"""
     if not is_admin(update.effective_user.id):
         return
-    origin = getattr(update.message, "forward_origin", None)
+    origin = getattr(update.effective_message, "forward_origin", None)
     chat = getattr(origin, "chat", None)
     if not chat:
-        await update.message.reply_text("Ye message kisi channel se forward nahi hua.")
+        await update.effective_message.reply_text("Please forward a message from a channel.")
         return
-    await update.message.reply_text(f"📡 {chat.title}\nID: {chat.id}")
+    await update.effective_message.reply_text(f"📡 {chat.title}\nID: {chat.id}")
 
+async def forcecheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    raw = os.getenv("FORCE_CHANNEL")
+    channel = force_channel()
+    if not channel:
+        await update.effective_message.reply_text(
+            f"❌ FORCE_CHANNEL missing/invalid (current value: {raw!r})."
+        )
+        return
+    lines = [f"FORCE_CHANNEL: {channel}"]
+    try:
+        chat = await context.bot.get_chat(channel)
+        lines.append(f"Channel: {chat.title}")
+        me = await context.bot.get_chat_member(channel, context.bot.id)
+        lines.append(f"Bot status: {me.status}")
+        lines.append("✅ Bot admin." if me.status == "administrator"
+                     else "⚠️ Make the bot an admin in the force-join channel.")
+    except Exception as exc:
+        lines.append(f"❌ Error: {esc(exc)}")
+    lines.append(f"Join link: {await get_force_link(context) or 'Set FORCE_LINK manually'}")
+    await update.effective_message.reply_text("\n".join(lines))
 
-# ================================================================ EXPIRY JOB
+async def on_force_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    member_update = update.chat_member
+    channel = force_channel()
+    if not member_update or not channel or member_update.chat.id != channel:
+        return
+    user = member_update.new_chat_member.user
+    if user.is_bot:
+        return
+    was_member = _in_status(
+        member_update.old_chat_member.status,
+        getattr(member_update.old_chat_member, "is_member", None)
+    )
+    now_member = _in_status(
+        member_update.new_chat_member.status,
+        getattr(member_update.new_chat_member, "is_member", None)
+    )
+    if await db.users.find_one({"_id": user.id}) is None or await is_banned(user.id):
+        return
+    try:
+        if now_member and not was_member:
+            await purge_join_prompts(context.bot, user.id)
+            await drop_last_menu(context.bot, user.id)
+            msg = await context.bot.send_message(
+                user.id, start_text(user.first_name or user.full_name, thanks=True),
+                reply_markup=start_markup(), parse_mode=ParseMode.HTML,
+            )
+            LAST_MENU[user.id] = msg.message_id
+        elif was_member and not now_member:
+            await context.bot.send_message(
+                user.id,
+                "👋 You left the official channel. Join again to use the bot.",
+                parse_mode=ParseMode.HTML,
+            )
+    except Exception:
+        log.exception("Force-channel membership notification failed for %s", user.id)
+
+# ----------------------------- EXPIRY JOB -----------------------------
 async def expiry_job(context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
-    expired = await db.subs.find({"active": True, "expiry_ts": {"$lte": now}}).to_list(None)
-    remind = await db.subs.find({
+    to_remind = await db.subs.find({
         "active": True, "reminded": False,
         "expiry_ts": {"$gt": now, "$lte": now + REMIND_DAYS * DAY},
     }).to_list(None)
-
-    for r in remind:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Renew", callback_data=f"p:{r['product']}")]])
+    for sub in to_remind:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Renew", callback_data=f"p:{sub['product']}")
+        ]])
         try:
             await context.bot.send_message(
-                r["user_id"],
-                f"⚠️ Aapka <b>{esc(pname(r['product']))}</b> subscription "
-                f"<b>{fmt(r['expiry_ts'])}</b> ko expire hoga. Renew kar lein!",
-                reply_markup=kb, parse_mode=ParseMode.HTML, auto_delete=False,
+                sub["user_id"],
+                f"⚠️ Your <b>{esc(pname(sub['product']))}</b> subscription expires "
+                f"on <b>{fmt(sub['expiry_ts'])}</b>. Please renew.",
+                reply_markup=keyboard, parse_mode=ParseMode.HTML, auto_delete=False,
             )
         except Exception:
-            pass
-        await db.subs.update_one({"_id": r["_id"]}, {"$set": {"reminded": True}})
-
-    for r in expired:
-        key, uid = r["product"], r["user_id"]
-        # sirf tab expire karo jab beech mein renew na hua ho
-        res = await db.subs.update_one(
-            {"_id": r["_id"], "expiry_ts": r["expiry_ts"], "active": True}, {"$set": {"active": False}}
+            log.exception("Expiry reminder failed for user %s", sub["user_id"])
+        await db.subs.update_one(
+            {"_id": sub["_id"], "expiry_ts": sub["expiry_ts"], "reminded": False},
+            {"$set": {"reminded": True}},
         )
-        if res.modified_count == 0:
+
+    expired = await db.subs.find({
+        "active": True, "expiry_ts": {"$lte": now}
+    }).to_list(None)
+    for sub in expired:
+        result = await db.subs.update_one(
+            {"_id": sub["_id"], "expiry_ts": sub["expiry_ts"], "active": True},
+            {"$set": {"active": False}},
+        )
+        if not result.modified_count:
             continue
-        await kick(context, uid, key)
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Re-new Subscription", callback_data=f"p:{key}")]])
+        try:
+            await kick(context, sub["user_id"], sub["product"])
+        except Exception:
+            # Subscription is marked inactive; explicitly alert admins if removal failed.
+            log.exception("Could not remove expired user %s", sub["user_id"])
+            for admin_id in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(
+                        admin_id,
+                        f"⚠️ Expired subscription removal failed for user {sub['user_id']} "
+                        f"({esc(pname(sub['product']))}). Remove manually.",
+                        auto_delete=False,
+                    )
+                except Exception:
+                    pass
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Renew subscription", callback_data=f"p:{sub['product']}")
+        ]])
         try:
             await context.bot.send_message(
-                uid,
-                f"⏰ Aapka <b>{esc(pname(key))}</b> subscription expire ho gaya hai.\n"
-                "Dobara access ke liye please <b>re-new your subscription</b> 👇",
-                reply_markup=kb, parse_mode=ParseMode.HTML, auto_delete=False,
+                sub["user_id"],
+                f"⏰ Your <b>{esc(pname(sub['product']))}</b> subscription has expired.\n"
+                "Renew to request access again.",
+                reply_markup=keyboard, parse_mode=ParseMode.HTML, auto_delete=False,
             )
         except Exception:
             pass
-        for admin in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    admin, f"⏰ Expired & removed: <code>{uid}</code> — {esc(pname(key))}",
-                    parse_mode=ParseMode.HTML,
-                )
-            except Exception:
-                pass
 
-
-# ================================================================ MAIN
+# ----------------------------- HEALTH SERVER / MAIN -----------------------------
 def start_health_server():
-    """Render jaise hosts 'Web Service' mein port maangte hain. PORT set ho tabhi chalta hai."""
     port = os.getenv("PORT")
     if not port:
         return
@@ -1106,32 +1129,28 @@ def start_health_server():
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"ok")
-
         def do_HEAD(self):
             self.send_response(200)
             self.end_headers()
-
         def log_message(self, *args):
             pass
 
     server = HTTPServer(("0.0.0.0", int(port)), Health)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    log.info("Health server port %s pe chalu", port)
-
+    log.info("Health server listening on port %s", port)
 
 def main():
     start_health_server()
     app = (
-        Application.builder().bot(PremiumBot(BOT_TOKEN))
-        .post_init(post_init).post_shutdown(post_shutdown).build()
+        Application.builder()
+        .bot(PremiumBot(BOT_TOKEN))
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
     )
-
-    # user commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("mysubs", mysubs_cmd))
-    app.add_handler(CommandHandler("availableotts", availableotts_cmd))  # <-- naya command
-
-    # admin commands
+    app.add_handler(CommandHandler("availableotts", availableotts_cmd))
     app.add_handler(CommandHandler("subs", subs_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("revoke", revoke_cmd))
@@ -1142,25 +1161,23 @@ def main():
     app.add_handler(CommandHandler("setqr", setqr_cmd))
     app.add_handler(CommandHandler("removeqr", removeqr_cmd))
     app.add_handler(CommandHandler("forcecheck", forcecheck_cmd))
-
-    # buttons
-    app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^(ap|chg|cd|dur|rj):"))
-    app.add_handler(CallbackQueryHandler(user_cb, pattern=r"^(home|src|start|terms|my|otts|qr|p:.*|plan:.*)$"))
-
-    # force-channel join/leave tracking
+    app.add_handler(CallbackQueryHandler(
+        admin_cb, pattern=r"^(ap|chg|cd|dur|rj):"
+    ))
+    app.add_handler(CallbackQueryHandler(
+        user_cb, pattern=r"^(home|src|start|terms|my|otts|qr|p:.*|plan:.*)$"
+    ))
     app.add_handler(ChatMemberHandler(on_force_member, ChatMemberHandler.CHAT_MEMBER))
-
-    # messages
     app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, on_photo))
-    app.add_handler(MessageHandler(filters.FORWARDED & filters.ChatType.PRIVATE, forwarded_id))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, on_text))
-
-    # har 60 sec mein expiry check
+    app.add_handler(MessageHandler(
+        filters.FORWARDED & filters.ChatType.PRIVATE, forwarded_id
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, on_text
+    ))
     app.job_queue.run_repeating(expiry_job, interval=60, first=15)
-
-    log.info("Bot chalu ho gaya")
+    log.info("Bot starting")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()
