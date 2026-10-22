@@ -36,7 +36,19 @@ MONGO_URI = os.environ["MONGO_URI"]
 MONGO_DB = os.getenv("MONGO_DB", "subbot")
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(",", " ").split() if x.isdigit()}
 UPI_ID = os.getenv("UPI_ID", "yourname@upi")
-CONTACT_URL = os.getenv("CONTACT_URL", "https://t.me/dghelps_bot")  # Admin Support button
+def norm_url(u, default=""):
+    """Telegram button ke liye URL theek karo: '@name' / 't.me/name' / 'name.com' -> https://..."""
+    u = (u or "").strip().strip("\"'").strip()
+    if not u:
+        return default
+    if u.startswith("@"):
+        return "https://t.me/" + u[1:]
+    if u.startswith(("http://", "https://", "tg://")):
+        return u
+    return "https://" + u
+
+
+CONTACT_URL = norm_url(os.getenv("CONTACT_URL"), "https://t.me/dghelps_bot")  # Admin Support button
 
 IST = ZoneInfo("Asia/Kolkata")
 HOUR, DAY = 3600, 86400
@@ -327,7 +339,7 @@ def force_channel():
     return norm_chat_id(os.getenv("FORCE_CHANNEL", ""))
 
 
-_force_link = {"v": os.getenv("FORCE_LINK", "").strip()}
+_force_link = {"v": norm_url(os.getenv("FORCE_LINK"))}
 JOIN_PROMPTS = {}   # user_id -> [message_id]
 LAST_MENU = {}      # user_id -> welcome message_id
 
@@ -478,15 +490,17 @@ def start_text(name, thanks=False):
         if thanks
         else f"✨ <b>Welcome, {name}!</b>"
     )
-    return head + "\n\n<blockquote><b>💎 Premium Services Available.<b></blockquote>\n\n"
+    return head + "\n\n<blockquote>💎 Premium services mein aapka swagat hai.</blockquote>\n\n👇 Neeche se option choose karein"
 
 
-def start_markup():
-    return InlineKeyboardMarkup([
+def start_markup(support=True):
+    rows = [
         [InlineKeyboardButton("📂 Available Sources", callback_data="src")],
         [InlineKeyboardButton("🌐 Terms & Conditions", callback_data="terms")],
-        [InlineKeyboardButton("🛟 Admin Support", url=CONTACT_URL)],
-    ])
+    ]
+    if support:
+        rows.append([InlineKeyboardButton("🛟 Admin Support", url=CONTACT_URL)])
+    return InlineKeyboardMarkup(rows)
 
 
 # Terms & Conditions: abhi blank. Apna text yahan "..." ke andar likho.
@@ -506,9 +520,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     context.user_data.pop("buying", None)
     await drop_last_menu(context.bot, u.id)
-    m = await update.effective_message.reply_text(
-        start_text(u.first_name or u.full_name), reply_markup=start_markup(), parse_mode=ParseMode.HTML
-    )
+    text = start_text(u.first_name or u.full_name)
+    try:
+        m = await update.effective_message.reply_text(
+            text, reply_markup=start_markup(), parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        log.error("Start screen (support button ke saath) fail: %s | CONTACT_URL=%r", e, CONTACT_URL)
+        m = await update.effective_message.reply_text(
+            text, reply_markup=start_markup(support=False), parse_mode=ParseMode.HTML
+        )
     LAST_MENU[u.id] = m.message_id
     try:
         await update.effective_message.delete()
