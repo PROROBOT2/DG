@@ -376,14 +376,13 @@ def home_text(name, thanks=False):
         if thanks else "💎 <b>Premium Access Hub</b>\n\n"
     )
     return (
-        heading + "<blockquote>💎 <b>Premium Access Hub</b>\n"
-        "Choose a plan to request access.</blockquote>\n\n"
-        "⚡ Access after payment verification\n"
-        "🔒 UPI payment\n"
-        "📺 /availableotts — available services\n\n"
-        "👇 <b>Choose a service below</b>"
+        heading + "<blockquote>💎 <b>🚧Note:-</blockquote>\n\n"
+        "• Request Admins For Content ✅\n"
+        "• Old + New-Releases 📻💥\n"
+        "• Valid For Movies/Web-Series Only. 💈\n"
+        "   <i>- T&C Apply.</i>\n\n"
+        "👇 <b>Select Your Plan 👇</b>"
     )
-
 def start_markup(support=True):
     rows = [
         [InlineKeyboardButton("📂 Available Services", callback_data="src")],
